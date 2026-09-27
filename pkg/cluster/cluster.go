@@ -104,31 +104,33 @@ func (f IPFamily) Valid() bool {
 
 // Config describes a cluster to create.
 type Config struct {
-	Name          string
-	Distro        string // kubeadm or k3s; persisted by non-OCI VM backends
-	K8sVersion    string // exact resolved version when the VM image does not encode it
-	Workers       int
-	GPUWorkers    int    // real Apple GPU workers; zero keeps the apple/container path
-	GPUImage      string // resolved bootable raw Fedora disk for GPU clusters
-	GPUDiskSize   string // writable disk size for each krunkit VM
-	GPUDriver     string // device-plugin or dra
-	Image         string
-	CPUs          string
-	Memory        string // worker VMs; measured idle usage is ~400Mi, so 2G default
-	CPMemory      string // control plane; etcd+apiserver (and all addons on single-node) need headroom
-	CNI           string
-	Kernel        string   // resolved kernel Image path; empty = runtime default
-	IPFamily      IPFamily // ipv4 (default), dual, or ipv6; non-ipv4 requires the full kernel
-	DNS           []string // node VM nameservers; empty = runtime default resolv.conf (see nodeDNS)
-	Mounts        runtime.Mounts
-	Publish       runtime.Publishes // host port forwards for the control-plane VM (--publish)
-	NoMetrics     bool
-	NoStorage     bool
-	NoLB          bool
-	NoEdgeProxy   bool
-	Observability bool
-	Gateway       bool
-	WaitTimeout   time.Duration
+	Name                string
+	Distro              string // kubeadm or k3s; persisted by non-OCI VM backends
+	K8sVersion          string // exact resolved version when the VM image does not encode it
+	Workers             int
+	GPUWorkers          int    // real Apple GPU workers; zero keeps the apple/container path
+	GPUImage            string // resolved bootable raw Fedora disk for GPU clusters
+	GPUDiskSize         string // writable disk size for each krunkit VM
+	GPUDriver           string // device-plugin or dra
+	Image               string
+	CPUs                string
+	Memory              string // worker VMs; measured idle usage is ~400Mi, so 2G default
+	CPMemory            string // control plane; etcd+apiserver (and all addons on single-node) need headroom
+	CNI                 string
+	Kernel              string   // resolved kernel Image path; empty = runtime default
+	IPFamily            IPFamily // ipv4 (default), dual, or ipv6; non-ipv4 requires the full kernel
+	DNS                 []string // node VM nameservers; empty = runtime default resolv.conf (see nodeDNS)
+	Mounts              runtime.Mounts
+	Publish             runtime.Publishes // host port forwards for the control-plane VM (--publish)
+	K3sControlPlaneArgs []string          // extra k3s server argv entries, appended after Kiac defaults
+	K3sWorkerArgs       []string          // extra k3s agent argv entries, appended after Kiac defaults
+	NoMetrics           bool
+	NoStorage           bool
+	NoLB                bool
+	NoEdgeProxy         bool
+	Observability       bool
+	Gateway             bool
+	WaitTimeout         time.Duration
 }
 
 // family returns the configured IP family, defaulting an empty value to

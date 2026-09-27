@@ -132,7 +132,7 @@ func TestK3sImagePins(t *testing.T) {
 	}
 }
 
-func TestK3sServerArgs(t *testing.T) {
+func TestK3sControlPlaneArgs(t *testing.T) {
 	args := k3sServerArgs(Config{}, "kiac-dev-control-plane")
 	if args[0] != "server" {
 		t.Fatalf("first arg = %q, want server", args[0])
@@ -164,16 +164,77 @@ func TestK3sServerArgs(t *testing.T) {
 			t.Errorf("No* server args %q missing %q", joined, want)
 		}
 	}
+
+	withExtra := k3sServerArgs(Config{K3sControlPlaneArgs: []string{"--tls-san", "api.dev.test"}}, "cp")
+	joined = " " + strings.Join(withExtra, " ") + " "
+	if !strings.Contains(joined, " --tls-san api.dev.test ") {
+		t.Errorf("server args %q missing custom args", joined)
+	}
 }
 
-func TestK3sAgentArgsAndEnv(t *testing.T) {
-	args := k3sAgentArgs("kiac-dev-worker-1")
+func TestK3sWorkerArgsAndEnv(t *testing.T) {
+	args := k3sAgentArgs(Config{}, "kiac-dev-worker-1")
 	if len(args) != 3 || args[0] != "agent" || args[1] != "--node-name" || args[2] != "kiac-dev-worker-1" {
 		t.Errorf("agent args = %q", args)
+	}
+	extra := k3sAgentArgs(Config{K3sWorkerArgs: []string{"--kubelet-arg=event-qps=100"}}, "kiac-dev-worker-1")
+	if got := strings.Join(extra, " "); !strings.Contains(got, "--kubelet-arg=event-qps=100") {
+		t.Errorf("agent args = %q, missing custom arg", got)
 	}
 	env := k3sAgentEnv("192.168.64.5", "tok123")
 	if len(env) != 2 || env[0] != "K3S_URL=https://192.168.64.5:6443" || env[1] != "K3S_TOKEN=tok123" {
 		t.Errorf("agent env = %q", env)
+	}
+}
+
+func TestValidateK3sArgs(t *testing.T) {
+	if err := validateK3sArgs([]string{"--tls-san", "api.dev.test"}, "--k3s-controlplane-arg"); err != nil {
+		t.Fatalf("valid args rejected: %v", err)
+	}
+	if err := validateK3sArgs([]string{"--disable=helm-controller"}, "--k3s-controlplane-arg"); err != nil {
+		t.Fatalf("valid --disable value rejected: %v", err)
+	}
+	if err := validateK3sArgs([]string{"", "api.dev.test"}, "--k3s-controlplane-arg"); err == nil {
+		t.Fatal("empty k3s arg accepted")
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "managed cluster-cidr", args: []string{"--cluster-cidr=10.123.0.0/16"}},
+		{name: "managed service-cidr", args: []string{"--service-cidr=10.96.0.0/12"}},
+		{name: "managed node-name", args: []string{"--node-name", "custom-node"}},
+		{name: "managed flannel-backend", args: []string{"--flannel-backend=vxlan"}},
+		{name: "managed network-policy toggle", args: []string{"--disable-network-policy"}},
+		{name: "managed disable equals", args: []string{"--disable=traefik"}},
+		{name: "managed disable split", args: []string{"--disable", "servicelb"}},
+		{name: "managed disable list", args: []string{"--disable=foo,local-storage,bar"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateK3sArgs(tc.args, "--k3s-controlplane-arg"); err == nil {
+				t.Fatalf("managed k3s args accepted: %q", tc.args)
+			}
+		})
+	}
+}
+
+func TestK3sManagedArgsRejectBothLongOptionSpellings(t *testing.T) {
+	for _, prefix := range []string{"-", "--"} {
+		for _, name := range []string{"cluster-cidr", "service-cidr", "node-name", "flannel-backend", "disable-network-policy"} {
+			for _, args := range [][]string{{prefix + name + "=value"}, {prefix + name, "value"}} {
+				if err := validateK3sArgs(args, "--k3s-controlplane-arg"); err == nil {
+					t.Errorf("accepted managed option: %q", args)
+				}
+			}
+		}
+		for _, args := range [][]string{{prefix + "disable=traefik"}, {prefix + "disable", "gateway-api-crd"}, {prefix + "disable=other,servicelb"}} {
+			if err := validateK3sArgs(args, "--k3s-controlplane-arg"); err == nil {
+				t.Errorf("accepted managed addon override: %q", args)
+			}
+		}
+		if err := validateK3sArgs([]string{prefix + "tls-san", "node-name"}, "--k3s-controlplane-arg"); err != nil {
+			t.Errorf("rejected an ordinary option value: %v", err)
+		}
 	}
 }
 

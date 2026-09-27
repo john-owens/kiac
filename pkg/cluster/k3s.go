@@ -49,6 +49,7 @@ func k3sServerArgs(cfg Config, nodeName string) []string {
 		// standard channel that conflicts with our experimental CRDs.
 		"--disable=gateway-api-crd",
 	}
+
 	// Dual-stack: give k3s both pod and Service CIDRs (v4 primary). The
 	// node --node-ip is set at boot in k3sBoot, once the VM knows its own
 	// addresses. Only "dual" reaches here; ipv6-only k3s is rejected in
@@ -70,12 +71,60 @@ func k3sServerArgs(cfg Config, nodeName string) []string {
 	if cfg.NoStorage {
 		args = append(args, "--disable=local-storage")
 	}
+	args = append(args, cfg.K3sControlPlaneArgs...)
 	return args
 }
 
 // k3sAgentArgs builds the k3s agent command line for one worker.
-func k3sAgentArgs(nodeName string) []string {
-	return []string{"agent", "--node-name", nodeName}
+func k3sAgentArgs(cfg Config, nodeName string) []string {
+	args := []string{"agent", "--node-name", nodeName}
+	return append(args, cfg.K3sWorkerArgs...)
+}
+
+func validateK3sArgs(values []string, flag string) error {
+	managedDisable := map[string]struct{}{
+		"traefik":                {},
+		"servicelb":              {},
+		"gateway-api-crd":        {},
+		"metrics-server":         {},
+		"local-storage":          {},
+		"network-policy":         {},
+		"disable-network-policy": {},
+	}
+	for _, v := range values {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("%s does not accept an empty value", flag)
+		}
+	}
+	for i := range values {
+		raw := strings.TrimSpace(values[i])
+		name, value, hasValue := strings.Cut(raw, "=")
+		if !strings.HasPrefix(name, "-") {
+			continue // This token can be the preceding option's value.
+		}
+		// K3s accepts one- and two-dash long options through urfave/cli.
+		// Normalize before checking KIAC-managed flags.
+		name = "--" + strings.TrimLeft(name, "-")
+		switch name {
+		case "--cluster-cidr", "--service-cidr", "--node-name", "--flannel-backend", "--disable-network-policy":
+			return fmt.Errorf("%s does not allow overriding %s; kiac manages it", flag, name)
+		case "--disable":
+			var disabled string
+			switch {
+			case hasValue:
+				disabled = value
+			case i+1 < len(values):
+				disabled = strings.TrimSpace(values[i+1])
+			}
+			for _, item := range strings.Split(disabled, ",") {
+				item = strings.TrimSpace(item)
+				if _, managed := managedDisable[item]; managed {
+					return fmt.Errorf("%s does not allow overriding --disable=%s; kiac manages it", flag, item)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // k3sBoot wraps a k3s command line in a /bin/sh preamble that relinks
@@ -172,7 +221,7 @@ func k3sServerRunOpts(cfg Config, nodeName, token string, dns []string) runtime.
 
 // k3sAgentRunOpts mirrors k3sServerRunOpts for workers.
 func k3sAgentRunOpts(cfg Config, nodeName string, env []string, dns []string) runtime.RunOpts {
-	entry, bootArgs := k3sBoot(cfg, k3sAgentArgs(nodeName))
+	entry, bootArgs := k3sBoot(cfg, k3sAgentArgs(cfg, nodeName))
 	return runtime.RunOpts{
 		Name:       nodeName,
 		Image:      cfg.Image,
@@ -246,6 +295,12 @@ func (m *Manager) CreateK3s(cfg Config) error {
 		return err
 	}
 	if err := runtime.ValidatePublishes(cfg.Publish); err != nil {
+		return err
+	}
+	if err := validateK3sArgs(cfg.K3sControlPlaneArgs, "--k3s-controlplane-arg"); err != nil {
+		return err
+	}
+	if err := validateK3sArgs(cfg.K3sWorkerArgs, "--k3s-worker-arg"); err != nil {
 		return err
 	}
 	if cfg.family() == IPv6 {

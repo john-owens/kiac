@@ -263,12 +263,13 @@ kiac create cluster                          # single node, everything included
 kiac create cluster --name dev --workers 2   # 1 control plane + 2 workers
 kiac create cluster --k8s-version 1.34       # pick your Kubernetes (kubeadm 1.32-1.37 pinned)
 kiac create cluster --distro k3s --workers 1 # rancher/k3s nodes: sqlite datastore, up in under a minute
+kiac create cluster --distro k3s --k3s-controlplane-arg=--tls-san --k3s-controlplane-arg=api.dev.test # append custom k3s server args
 kiac create cluster --cni cilium --kernel full --workers 2   # Cilium eBPF on the full node kernel
 kiac create cluster --cni flannel --kernel full --workers 2  # flannel VXLAN on the full node kernel, no host CLI needed
 kiac create cluster --distro k3s --workers 1 --gpu-workers 1 --gpu-resource-driver dra # real Apple GPU worker (alpha)
 kiac create cluster --config cluster.yaml    # declarative; explicit flags override the file (see examples/cluster.yaml)
 kiac create cluster --mount type=bind,source="$PWD",target=/workspace,readonly # host directory in every node
-kiac create cluster -p 127.0.0.1:8080:80    # publish localhost:8080 to control-plane VM port 80
+kiac create cluster -p 127.0.0.1:8080:80    # publish localhost:8080 to control-plane VM port 80 (NodePorts on workers are still direct-IP only)
 kiac ui                                      # local web console: manage clusters, kubectl Console per cluster
 kiac get clusters                            # -o wide for versions/age, -o json for scripts
 kiac get nodes --name dev
@@ -313,6 +314,8 @@ Full guides and command reference live on the [docs site](https://saiyam1814.git
 | `--dns` | runtime default | nameserver IPs for the node VMs, repeatable up to 3 (resolv.conf's own limit); given, it replaces the runtime's default resolv.conf entirely rather than adding to it |
 | `--mount` | | bind a host directory into every node VM; repeat `type=bind,source=/host/path,target=/node/path[,readonly]`. Explicit CLI mounts replace config-file mounts |
 | `-p`, `--publish` | | publish host traffic to the control-plane VM only using `[host-ip:]host-port:container-port[/protocol]`; omitted host IP binds all IPv4 interfaces, so use `127.0.0.1` for loopback only; repeatable; does not add API-server TLS SANs |
+| `--k3s-controlplane-arg` | | extra k3s server argv token; repeatable (`--distro k3s` only). Values are only minimally validated and conflicting flags can break the cluster |
+| `--k3s-worker-arg` | | extra k3s agent argv token; repeatable (`--distro k3s` only). Values are only minimally validated and conflicting flags can break the cluster |
 | `--cpus` | `4` | vCPUs per node VM |
 | `--memory` | `2G` | memory per worker VM (idle workers use a few hundred MB) |
 | `--cp-memory` | `4G` | memory for the control-plane VM (etcd, apiserver, and on single-node clusters every addon) |
