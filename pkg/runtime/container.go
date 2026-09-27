@@ -159,6 +159,7 @@ type RunOpts struct {
 	Args       []string // command arguments appended after the image
 	DNS        []string // nameserver IPs (--dns); empty keeps the runtime default resolv.conf
 	Mounts     []Mount  // host directory bind mounts (--mount)
+	Publish    []string // host-to-container forwards (--publish), e.g. 127.0.0.1:8080:80
 }
 
 // RunDetached boots a node VM. The kindest/node entrypoint brings up
@@ -192,6 +193,9 @@ func (c *Client) RunDetached(o RunOpts) error {
 	}
 	for _, mount := range o.Mounts {
 		args = append(args, "--mount", mount.String())
+	}
+	for _, publish := range o.Publish {
+		args = append(args, "--publish", publish)
 	}
 	if o.Entrypoint != "" {
 		args = append(args, "--entrypoint", o.Entrypoint)

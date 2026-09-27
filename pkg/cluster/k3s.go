@@ -166,6 +166,7 @@ func k3sServerRunOpts(cfg Config, nodeName, token string, dns []string) runtime.
 		Args:       bootArgs,
 		DNS:        dns,
 		Mounts:     cfg.Mounts,
+		Publish:    publishForNode(cfg, nodeName),
 	}
 }
 
@@ -242,6 +243,9 @@ func (m *Manager) CreateK3s(cfg Config) error {
 		return err
 	}
 	if err := runtime.ValidateMounts(cfg.Mounts); err != nil {
+		return err
+	}
+	if err := runtime.ValidatePublishes(cfg.Publish); err != nil {
 		return err
 	}
 	if cfg.family() == IPv6 {
