@@ -105,6 +105,11 @@ wait: 5m
 # Default: false. Native arm64 images are always faster when available.
 rosetta: false
 
+# Extra CA certificates (PEM files) every node trusts for image pulls,
+# e.g. a corporate root or TLS-intercepting proxy. Default: none.
+# caCerts:
+#   - /Users/me/corp-root.pem
+
 # Addons are positive toggles (true installs). The first three default
 # to true, the last two to false; everything is on here.
 addons:

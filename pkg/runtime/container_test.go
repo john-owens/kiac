@@ -624,3 +624,15 @@ func TestImageSavePlatform(t *testing.T) {
 		}
 	}
 }
+
+func TestRunDetachedPassesRosettaWhenHelpProbeFails(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	client := fakeContainerClient(t, "", argsFile)
+
+	if err := client.RunDetached(RunOpts{Name: "kiac-test", Image: "example.invalid/node:v1", Rosetta: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readArgs(t, argsFile); !slices.Contains(got, "--rosetta") {
+		t.Fatalf("run args = %q, want --rosetta passed through to the CLI", got)
+	}
+}

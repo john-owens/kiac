@@ -131,7 +131,9 @@ type Config struct {
 	NoEdgeProxy         bool
 	Observability       bool
 	Gateway             bool
-	Rosetta             bool // run linux/amd64 binaries in node VMs via Rosetta; apple/container only
+	Rosetta             bool     // run linux/amd64 binaries in node VMs via Rosetta; apple/container only
+	CACertFiles         []string // --ca-cert PEM paths, resolved into CACerts before Create
+	CACerts             []string // extra trusted CA certificates (one PEM block each) for node image pulls
 	WaitTimeout         time.Duration
 }
 
@@ -273,6 +275,11 @@ func (m *Manager) Create(cfg Config) error {
 			n := nodes[i]
 			if err := m.rt.WaitReady(n, cfg.WaitTimeout); err != nil {
 				return err
+			}
+			if len(cfg.CACerts) > 0 {
+				if err := m.installKubeadmExtraCA(n, cfg.CACerts, cfg.WaitTimeout); err != nil {
+					return err
+				}
 			}
 			if _, err := m.rt.Exec(n, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 				return err

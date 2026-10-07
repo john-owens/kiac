@@ -229,8 +229,11 @@ func (c *Client) supportsCapAdd() bool {
 }
 
 // supportsRosetta probes whether this container CLI knows --rosetta.
+// An empty probe (a failed `run --help`) is not proof of absence, so it
+// defers to `container run` itself instead of rejecting the request.
 func (c *Client) supportsRosetta() bool {
-	return strings.Contains(c.runHelpOutput(), "--rosetta")
+	help := c.runHelpOutput()
+	return help == "" || strings.Contains(help, "--rosetta")
 }
 
 func (c *Client) supportsSecurityPathOverrides() bool {

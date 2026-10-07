@@ -37,6 +37,7 @@ type FileConfig struct {
 	CPMemory            string         `yaml:"cpMemory"`
 	Wait                string         `yaml:"wait"`
 	Rosetta             *bool          `yaml:"rosetta"`
+	CACerts             []string       `yaml:"caCerts"`
 	Addons              FileAddons     `yaml:"addons"`
 }
 
@@ -157,6 +158,9 @@ func (fc *FileConfig) Merge(cfg *Config, distro, k8sVersion *string, changed fun
 			return fmt.Errorf("invalid wait %q in config file (must be > 0)", fc.Wait)
 		}
 		cfg.WaitTimeout = d
+	}
+	if len(fc.CACerts) > 0 && !changed("ca-cert") {
+		cfg.CACertFiles = append([]string(nil), fc.CACerts...)
 	}
 	if fc.Rosetta != nil && !changed("rosetta") {
 		cfg.Rosetta = *fc.Rosetta

@@ -285,3 +285,35 @@ func TestCreateClusterRejectsRosettaOnGPU(t *testing.T) {
 		t.Fatalf("RunE error = %v, want --rosetta GPU rejection", err)
 	}
 }
+
+func TestCreateClusterCACertValidation(t *testing.T) {
+	oldCfg, oldDistro := createCfg, createDistro
+	oldConfigFile, oldKernel, oldIPFamily := createConfigFile, createKernel, createIPFamily
+	oldVersion := k8sVersion
+	t.Cleanup(func() {
+		createCfg, createDistro = oldCfg, oldDistro
+		createConfigFile, createKernel, createIPFamily = oldConfigFile, oldKernel, oldIPFamily
+		k8sVersion = oldVersion
+	})
+	missing := filepath.Join(t.TempDir(), "absent.pem")
+	for name, tc := range map[string]struct {
+		gpuWorkers int
+		wantErr    string
+	}{
+		"rejected on GPU clusters": {gpuWorkers: 1, wantErr: "applies to apple/container nodes"},
+		"missing file fails early": {gpuWorkers: 0, wantErr: "reading --ca-cert"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			createCfg = cluster.Config{
+				Name: "dev", GPUWorkers: tc.gpuWorkers, GPUImage: cluster.DefaultGPUImage,
+				GPUDriver: "device-plugin", GPUDiskSize: "20G", WaitTimeout: 5 * time.Minute,
+				CACertFiles: []string{missing},
+			}
+			createDistro, createConfigFile, createKernel, createIPFamily, k8sVersion = "kubeadm", "", "", "ipv4", ""
+			err := createClusterCmd.RunE(createClusterCmd, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("RunE error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}

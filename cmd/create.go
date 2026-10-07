@@ -68,8 +68,16 @@ var createClusterCmd = &cobra.Command{
 		if createCfg.GPUWorkers > 0 && createKernel != "" {
 			return fmt.Errorf("--kernel applies to apple/container nodes; real GPU clusters boot the kernel in --gpu-image")
 		}
+		if createCfg.GPUWorkers > 0 && len(createCfg.CACertFiles) > 0 {
+			return fmt.Errorf("--ca-cert (caCerts in --config) applies to apple/container nodes; real GPU clusters (krunkit backend) do not support it yet")
+		}
+		certs, err := cluster.LoadCABundle(createCfg.CACertFiles)
+		if err != nil {
+			return err
+		}
+		createCfg.CACerts = certs
 		if createCfg.GPUWorkers > 0 && createCfg.Rosetta {
-			return fmt.Errorf("--rosetta applies to apple/container nodes; real GPU clusters (krunkit backend) cannot use Rosetta")
+			return fmt.Errorf("--rosetta (rosetta in --config) applies to apple/container nodes; real GPU clusters (krunkit backend) cannot use Rosetta")
 		}
 		if createCfg.GPUWorkers > 0 && len(createCfg.Publish) > 0 {
 			return fmt.Errorf("--publish is not supported on real GPU clusters (krunkit backend)")
@@ -204,6 +212,7 @@ func init() {
 	f.BoolVar(&createCfg.NoEdgeProxy, "no-edge-proxy", false, "skip the node-local edge proxy that fixes large TCP uploads through NodePorts and LoadBalancers")
 	f.BoolVar(&createCfg.Observability, "observability", false, "install Prometheus + Grafana + node-exporter, Grafana on a LoadBalancer IP")
 	f.BoolVar(&createCfg.Gateway, "gateway", false, "install Gateway API CRDs + Traefik with a ready-to-use GatewayClass and Gateway")
+	f.StringArrayVar(&createCfg.CACertFiles, "ca-cert", nil, "PEM file of extra CA certificates every node trusts for image pulls (corporate root, TLS-intercepting proxy, Nexus/Artifactory); repeatable")
 	f.BoolVar(&createCfg.Rosetta, "rosetta", false, "enable Rosetta in every node VM so linux/amd64 images and binaries run on Apple silicon (off by default)")
 	f.DurationVar(&createCfg.WaitTimeout, "wait", 5*time.Minute, "timeout for readiness and CNI steps; GPU package setup uses at least 10m")
 	createCmd.AddCommand(createClusterCmd)

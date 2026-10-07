@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -594,5 +595,26 @@ func TestLoadConfigFileRosetta(t *testing.T) {
 	}
 	if fc.Rosetta == nil || !*fc.Rosetta {
 		t.Fatalf("Rosetta = %v, want true", fc.Rosetta)
+	}
+}
+
+func TestMergeCACerts(t *testing.T) {
+	distro, version := "kubeadm", ""
+	fc := FileConfig{CACerts: []string{"/etc/corp/root.pem"}}
+
+	cfg := Config{}
+	if err := fc.Merge(&cfg, &distro, &version, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.CACertFiles, []string{"/etc/corp/root.pem"}) {
+		t.Fatalf("CACertFiles = %q, want file value", cfg.CACertFiles)
+	}
+
+	cfg = Config{CACertFiles: []string{"/cli.pem"}}
+	if err := fc.Merge(&cfg, &distro, &version, func(n string) bool { return n == "ca-cert" }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.CACertFiles, []string{"/cli.pem"}) {
+		t.Fatalf("CACertFiles = %q, want explicit flag to win", cfg.CACertFiles)
 	}
 }

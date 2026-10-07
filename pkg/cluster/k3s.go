@@ -136,7 +136,7 @@ func validateK3sArgs(values []string, flag string) error {
 // backend (CONFIG_IP_NF_IPTABLES_LEGACY=y) is fully supported. Both
 // variants ship in the image under /bin/aux.
 func k3sBoot(cfg Config, k3sArgs []string) (entrypoint string, args []string) {
-	cmd := k3sCgroupPrep + senderOffloadFix + "; " +
+	cmd := k3sExtraCAPrep + k3sCgroupPrep + senderOffloadFix + "; " +
 		"for t in iptables iptables-save iptables-restore ip6tables ip6tables-save ip6tables-restore; do ln -sf xtables-legacy-multi /bin/aux/$t; done; " +
 		"if [ -x " + kiacLBScriptPath + " ]; then " +
 		"mkdir -p /var/log /var/run; " +
@@ -209,7 +209,7 @@ func k3sServerRunOpts(cfg Config, nodeName, token string, dns []string) runtime.
 		Image:      cfg.Image,
 		CPUs:       cfg.CPUs,
 		Memory:     cfg.CPMemory,
-		Env:        []string{"K3S_TOKEN=" + token},
+		Env:        append([]string{"K3S_TOKEN=" + token}, k3sExtraCAEnvFor(cfg)...),
 		Entrypoint: entry,
 		Kernel:     cfg.Kernel,
 		Args:       bootArgs,
@@ -228,7 +228,7 @@ func k3sAgentRunOpts(cfg Config, nodeName string, env []string, dns []string) ru
 		Image:      cfg.Image,
 		CPUs:       cfg.CPUs,
 		Memory:     cfg.Memory,
-		Env:        env,
+		Env:        append(append([]string(nil), env...), k3sExtraCAEnvFor(cfg)...),
 		Entrypoint: entry,
 		Kernel:     cfg.Kernel,
 		Args:       bootArgs,
