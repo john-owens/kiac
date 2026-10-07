@@ -136,7 +136,7 @@ func validateK3sArgs(values []string, flag string) error {
 // backend (CONFIG_IP_NF_IPTABLES_LEGACY=y) is fully supported. Both
 // variants ship in the image under /bin/aux.
 func k3sBoot(cfg Config, k3sArgs []string) (entrypoint string, args []string) {
-	cmd := k3sExtraCAPrep + k3sRegistriesPrep + k3sCgroupPrep + senderOffloadFix + "; " +
+	cmd := k3sExtraCAPrep + k3sRegistriesPrep + k3sCgroupPrep + nodeBootTuning + "; " +
 		"for t in iptables iptables-save iptables-restore ip6tables ip6tables-save ip6tables-restore; do ln -sf xtables-legacy-multi /bin/aux/$t; done; " +
 		"if [ -x " + kiacLBScriptPath + " ]; then " +
 		"mkdir -p /var/log /var/run; " +

@@ -86,7 +86,7 @@ func (m *Manager) Resume(name string, waitTimeout time.Duration) error {
 			if _, err := m.rt.Exec(n, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 				return err
 			}
-			if _, err := m.rt.Exec(n, "sh", "-c", senderOffloadFix); err != nil {
+			if _, err := m.rt.Exec(n, "sh", "-c", nodeBootTuning); err != nil {
 				return err
 			}
 			// A dual-stack node's kubelet --node-ip pins the OLD v4 and v6

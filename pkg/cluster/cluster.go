@@ -90,6 +90,16 @@ const ipv6BootPrep = `KIAC_IF="$(ip -4 route show default 2>/dev/null | awk '{pr
 const senderOffloadFix = `KIAC_IF="$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')"; ` +
 	`[ -n "$KIAC_IF" ] && command -v ethtool >/dev/null 2>&1 && ethtool -K "$KIAC_IF" tso off gso off || true`
 
+// inotifyLimits raises the per-user inotify caps. The stock 128
+// instances is exhausted by a handful of watch-heavy pods (log
+// shippers, Argo CD, dev hot-reload), which then fail with "too many
+// open files". sysctls are runtime state, so this runs on every boot.
+// Best-effort, like senderOffloadFix.
+const inotifyLimits = `sysctl -qw fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true`
+
+// nodeBootTuning is the runtime tuning every node VM gets on each boot.
+const nodeBootTuning = senderOffloadFix + "; " + inotifyLimits
+
 // WantsIPv6 reports whether the family carries IPv6 traffic at all.
 func (f IPFamily) WantsIPv6() bool { return f == DualStack || f == IPv6 }
 
@@ -290,7 +300,7 @@ func (m *Manager) Create(cfg Config) error {
 			if _, err := m.rt.Exec(n, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 				return err
 			}
-			if _, err := m.rt.Exec(n, "sh", "-c", senderOffloadFix); err != nil {
+			if _, err := m.rt.Exec(n, "sh", "-c", nodeBootTuning); err != nil {
 				return err
 			}
 			if cfg.family().WantsIPv6() {
@@ -884,18 +894,16 @@ func (m *Manager) LoadImages(name string, images []string, platform string) erro
 			if err := m.rt.ImageSave(img, tarPath, platform); err != nil {
 				return err
 			}
-			for _, node := range infos {
+			// Each node reads its own handle on the saved tar, so the
+			// imports run concurrently instead of one node at a time.
+			return inParallel(len(infos), func(i int) error {
 				f, err := os.Open(tarPath)
 				if err != nil {
 					return err
 				}
-				err = m.rt.ExecStdin(node.Name, f, importCmd...)
-				f.Close()
-				if err != nil {
-					return err
-				}
-			}
-			return nil
+				defer f.Close()
+				return m.rt.ExecStdin(infos[i].Name, f, importCmd...)
+			})
 		})
 		os.Remove(tarPath)
 		if err != nil {

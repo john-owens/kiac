@@ -70,3 +70,30 @@ func TestLoadImagesRejectsMalformedPlatform(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadImagesImportsIntoEveryNode(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "container")
+	logPath := filepath.Join(t.TempDir(), "commands.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$KIAC_TEST_COMMAND_LOG"
+case "$*" in
+  "ls -a --format json")
+    printf '[{"id":"kiac-dev-control-plane","status":"running"},{"id":"kiac-dev-worker-1","status":"running"},{"id":"kiac-dev-worker-2","status":"running"}]'
+    ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KIAC_TEST_COMMAND_LOG", logPath)
+	manager := &Manager{rt: &runtime.Client{Bin: bin}}
+	if err := manager.LoadImages("dev", []string{"example.invalid/app:v1"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath)
+	for _, node := range []string{"kiac-dev-control-plane", "kiac-dev-worker-1", "kiac-dev-worker-2"} {
+		if !strings.Contains(string(raw), "exec -i "+node+" ctr -n k8s.io image import -") {
+			t.Errorf("image not imported into %s:\n%s", node, raw)
+		}
+	}
+}
