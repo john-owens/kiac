@@ -108,6 +108,9 @@
   <div class="note"><b>Where next?</b>
   <a href="networking.html">Networking</a> explains the vmnet fast/slow path story behind the kindnet and kiac-lb choices. <a href="cli-reference.html">CLI reference</a> lists every <code>create</code> flag.</div>
 
+  <h2 id="k0s">What about k0s?</h2>
+  <p>k0s was evaluated as a third distro. Run the way kiac runs k3s, it idled slightly heavier (about 556 MiB vs 533 MiB at Kubernetes 1.36), has no Kubernetes 1.37 release yet, and ships no storage provisioner, so k3s stays the stripped-down option. The measurements, implementation estimate, and the conditions for revisiting it are in <a href="https://github.com/saiyam1814/kiac/blob/main/docs/design/k0s-distro.md">docs/design/k0s-distro.md</a>.</p>
+
   <div class="pn">
     <a href="cli-reference.html"><span>Previous</span>CLI reference</a>
     <a class="next" href="cilium.html"><span>Next</span>Cilium &amp; the full kernel</a>
