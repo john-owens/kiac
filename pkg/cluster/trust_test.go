@@ -123,7 +123,7 @@ func TestK3sRunOptsCarryExtraCA(t *testing.T) {
 	}
 }
 
-func TestInstallKubeadmExtraCA(t *testing.T) {
+func TestConfigureKubeadmContainerdExtraCA(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "container")
 	logPath := filepath.Join(t.TempDir(), "commands.log")
 	stdinPath := filepath.Join(t.TempDir(), "stdin")
@@ -140,7 +140,7 @@ case "$*" in *"systemctl is-active containerd"*) echo active ;; esac
 	manager := &Manager{rt: &runtime.Client{Bin: bin}}
 
 	certs := []string{string(testCAPEM(t, "A")), string(testCAPEM(t, "B"))}
-	if err := manager.installKubeadmExtraCA("kiac-dev-worker-1", certs, time.Minute); err != nil {
+	if err := manager.configureKubeadmContainerd("kiac-dev-worker-1", certs, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(logPath)
@@ -153,7 +153,7 @@ case "$*" in *"systemctl is-active containerd"*) echo active ;; esac
 		"/usr/local/share/ca-certificates/kiac/kiac-1.crt",
 		"/usr/local/share/ca-certificates/kiac/kiac-2.crt",
 		"update-ca-certificates",
-		"systemctl restart containerd",
+		"restart containerd",
 	} {
 		if !strings.Contains(commands, want) {
 			t.Errorf("missing %q in:\n%s", want, commands)
@@ -167,6 +167,9 @@ case "$*" in *"systemctl is-active containerd"*) echo active ;; esac
 		t.Errorf("certificates written = %q, want both PEMs in order", stdin)
 	}
 	restart := strings.Index(commands, "systemctl restart containerd")
+	if restart < 0 {
+		t.Fatalf("containerd was not restarted:\n%s", commands)
+	}
 	if !strings.Contains(commands[restart:], "systemctl is-active containerd") {
 		t.Errorf("containerd readiness was not re-checked after restart:\n%s", commands)
 	}

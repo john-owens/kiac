@@ -76,6 +76,9 @@ var createClusterCmd = &cobra.Command{
 			return err
 		}
 		createCfg.CACerts = certs
+		if createCfg.GPUWorkers > 0 && createCfg.RegistryCache {
+			return fmt.Errorf("--registry-cache (registryCache in --config) applies to apple/container nodes; real GPU clusters (krunkit backend) do not support it yet")
+		}
 		if createCfg.GPUWorkers > 0 && createCfg.Rosetta {
 			return fmt.Errorf("--rosetta (rosetta in --config) applies to apple/container nodes; real GPU clusters (krunkit backend) cannot use Rosetta")
 		}
@@ -213,6 +216,7 @@ func init() {
 	f.BoolVar(&createCfg.Observability, "observability", false, "install Prometheus + Grafana + node-exporter, Grafana on a LoadBalancer IP")
 	f.BoolVar(&createCfg.Gateway, "gateway", false, "install Gateway API CRDs + Traefik with a ready-to-use GatewayClass and Gateway")
 	f.StringArrayVar(&createCfg.CACertFiles, "ca-cert", nil, "PEM file of extra CA certificates every node trusts for image pulls (corporate root, TLS-intercepting proxy, Nexus/Artifactory); repeatable")
+	f.BoolVar(&createCfg.RegistryCache, "registry-cache", false, "pull docker.io, registry.k8s.io, ghcr.io and quay.io images through a shared zot cache ("+cluster.RegistryCacheName+") that survives cluster deletion; started automatically")
 	f.BoolVar(&createCfg.Rosetta, "rosetta", false, "enable Rosetta in every node VM so linux/amd64 images and binaries run on Apple silicon (off by default)")
 	f.DurationVar(&createCfg.WaitTimeout, "wait", 5*time.Minute, "timeout for readiness and CNI steps; GPU package setup uses at least 10m")
 	createCmd.AddCommand(createClusterCmd)

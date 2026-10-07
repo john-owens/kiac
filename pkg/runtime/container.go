@@ -161,6 +161,7 @@ type RunOpts struct {
 	Mounts     []Mount  // host directory bind mounts (--mount)
 	Publish    []string // host-to-container forwards (--publish), e.g. 127.0.0.1:8080:80
 	Rosetta    bool     // expose Rosetta (--rosetta) so linux/amd64 binaries run in the VM
+	Volumes    []string // named volumes (-v name:/path) that outlive the container
 }
 
 // RunDetached boots a node VM. The kindest/node entrypoint brings up
@@ -197,6 +198,9 @@ func (c *Client) RunDetached(o RunOpts) error {
 	}
 	for _, d := range o.DNS {
 		args = append(args, "--dns", d)
+	}
+	for _, v := range o.Volumes {
+		args = append(args, "-v", v)
 	}
 	for _, mount := range o.Mounts {
 		args = append(args, "--mount", mount.String())
@@ -596,6 +600,15 @@ func (c *Client) ImageSave(image, path, platform string) error {
 	args = append(args, image, "--output", path)
 	_, err := c.run(args...)
 	return err
+}
+
+// VolumeDelete removes a named volume; a missing volume is not an error.
+func (c *Client) VolumeDelete(name string) error {
+	out, err := c.run("volume", "delete", name)
+	if err != nil && !strings.Contains(strings.ToLower(out), "not found") {
+		return err
+	}
+	return nil
 }
 
 // ImagePull pulls an image so `run` starts instantly afterwards.

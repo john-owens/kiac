@@ -317,3 +317,27 @@ func TestCreateClusterCACertValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateClusterRejectsRegistryCacheOnGPU(t *testing.T) {
+	oldCfg, oldDistro := createCfg, createDistro
+	oldConfigFile, oldKernel, oldIPFamily := createConfigFile, createKernel, createIPFamily
+	oldVersion := k8sVersion
+	t.Cleanup(func() {
+		createCfg, createDistro = oldCfg, oldDistro
+		createConfigFile, createKernel, createIPFamily = oldConfigFile, oldKernel, oldIPFamily
+		k8sVersion = oldVersion
+	})
+	if f := createClusterCmd.Flags().Lookup("registry-cache"); f == nil || f.DefValue != "false" {
+		t.Fatalf("--registry-cache flag missing or not off by default: %+v", f)
+	}
+	createCfg = cluster.Config{
+		Name: "dev", GPUWorkers: 1, GPUImage: cluster.DefaultGPUImage,
+		GPUDriver: "device-plugin", GPUDiskSize: "20G", WaitTimeout: 5 * time.Minute,
+		RegistryCache: true,
+	}
+	createDistro, createConfigFile, createKernel, createIPFamily, k8sVersion = "kubeadm", "", "", "ipv4", ""
+	err := createClusterCmd.RunE(createClusterCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "--registry-cache") {
+		t.Fatalf("RunE error = %v, want --registry-cache GPU rejection", err)
+	}
+}

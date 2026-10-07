@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/saiyam1814/kiac/pkg/ui"
 )
 
 // kubeadmExtraCADir is where kindest/node's update-ca-certificates picks
@@ -72,22 +74,50 @@ const k3sExtraCAPrep = `if [ -n "$` + k3sExtraCAEnv + `" ]; then ` +
 	`{ cat "$KIAC_CA.kiac-orig"; printf '%s' "$` + k3sExtraCAEnv + `" | base64 -d; } > "$KIAC_CA.kiac-new" && mv "$KIAC_CA.kiac-new" "$KIAC_CA"; ` +
 	`fi; `
 
-// installKubeadmExtraCA trusts certs in a booted kindest/node VM:
-// one file per certificate (update-ca-certificates links by first cert),
-// then a containerd restart so its cached system pool is reloaded. It
-// runs before kubeadm init, so every image pull already trusts them.
-func (m *Manager) installKubeadmExtraCA(node string, certs []string, wait time.Duration) error {
-	if _, err := m.rt.Exec(node, "sh", "-c", "rm -rf "+kubeadmExtraCADir+" && mkdir -p "+kubeadmExtraCADir); err != nil {
-		return fmt.Errorf("preparing extra CA directory on %s: %w", node, err)
-	}
-	for i, c := range certs {
-		dest := fmt.Sprintf("%s/kiac-%d.crt", kubeadmExtraCADir, i+1)
-		if err := m.rt.ExecStdinTimeout(node, transferBudget(wait), strings.NewReader(c), "sh", "-c", "cat > "+dest); err != nil {
-			return fmt.Errorf("installing extra CA certificate on %s: %w", node, err)
+// configureKubeadmContainerd trusts certs and/or points image pulls at
+// the registry cache in a booted kindest/node VM, then restarts
+// containerd once so both take effect. CAs go one file per certificate
+// (update-ca-certificates links by first cert); containerd caches its
+// system pool, hence the restart. It runs before kubeadm init, so every
+// Kubernetes image pull already uses them.
+func (m *Manager) configureKubeadmContainerd(node string, certs []string, mirrorIP string, wait time.Duration) error {
+	if len(certs) > 0 {
+		if _, err := m.rt.Exec(node, "sh", "-c", "rm -rf "+kubeadmExtraCADir+" && mkdir -p "+kubeadmExtraCADir); err != nil {
+			return fmt.Errorf("preparing extra CA directory on %s: %w", node, err)
+		}
+		for i, c := range certs {
+			dest := fmt.Sprintf("%s/kiac-%d.crt", kubeadmExtraCADir, i+1)
+			if err := m.rt.ExecStdinTimeout(node, transferBudget(wait), strings.NewReader(c), "sh", "-c", "cat > "+dest); err != nil {
+				return fmt.Errorf("installing extra CA certificate on %s: %w", node, err)
+			}
+		}
+		if _, err := m.rt.Exec(node, "update-ca-certificates"); err != nil {
+			return fmt.Errorf("trusting extra CA certificates on %s: %w", node, err)
 		}
 	}
-	if _, err := m.rt.Exec(node, "sh", "-c", "update-ca-certificates >/dev/null && systemctl restart containerd"); err != nil {
-		return fmt.Errorf("trusting extra CA certificates on %s: %w", node, err)
+	if mirrorIP != "" {
+		if _, err := m.rt.Exec(node, "sh", "-c", kubeadmMirrorScript(mirrorIP)); err != nil {
+			return fmt.Errorf("configuring registry cache mirror on %s: %w", node, err)
+		}
+	}
+	if _, err := m.rt.Exec(node, "systemctl", "restart", "containerd"); err != nil {
+		return fmt.Errorf("restarting containerd on %s: %w", node, err)
 	}
 	return m.rt.WaitReady(node, wait)
+}
+
+// startRegistryCacheFor ensures the shared cache is up and records its
+// address on cfg before any node boots.
+func (m *Manager) startRegistryCacheFor(cfg *Config) error {
+	if !cfg.RegistryCache {
+		return nil
+	}
+	return ui.Step("Starting shared registry cache "+RegistryCacheName, func() error {
+		ip, err := m.EnsureRegistryCache(cfg.CACerts)
+		if err != nil {
+			return err
+		}
+		cfg.RegistryCacheIP = ip
+		return nil
+	})
 }

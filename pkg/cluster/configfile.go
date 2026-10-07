@@ -38,6 +38,7 @@ type FileConfig struct {
 	Wait                string         `yaml:"wait"`
 	Rosetta             *bool          `yaml:"rosetta"`
 	CACerts             []string       `yaml:"caCerts"`
+	RegistryCache       *bool          `yaml:"registryCache"`
 	Addons              FileAddons     `yaml:"addons"`
 }
 
@@ -161,6 +162,9 @@ func (fc *FileConfig) Merge(cfg *Config, distro, k8sVersion *string, changed fun
 	}
 	if len(fc.CACerts) > 0 && !changed("ca-cert") {
 		cfg.CACertFiles = append([]string(nil), fc.CACerts...)
+	}
+	if fc.RegistryCache != nil && !changed("registry-cache") {
+		cfg.RegistryCache = *fc.RegistryCache
 	}
 	if fc.Rosetta != nil && !changed("rosetta") {
 		cfg.Rosetta = *fc.Rosetta

@@ -49,7 +49,15 @@ var startNodeCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ui.Banner(Version)
-		return cluster.NewManager().StartNode(startNodeCluster, args[0])
+		m := cluster.NewManager()
+		if err := m.StartNode(startNodeCluster, args[0]); err != nil {
+			return err
+		}
+		// A restarted node may hold the registry cache's old address.
+		if err := m.HealRegistryCache(startNodeCluster); err != nil {
+			ui.Warnf("registry cache not re-pointed (pulls fall back to upstream registries): %v", err)
+		}
+		return nil
 	},
 }
 

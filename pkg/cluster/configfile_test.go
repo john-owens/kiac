@@ -618,3 +618,22 @@ func TestMergeCACerts(t *testing.T) {
 		t.Fatalf("CACertFiles = %q, want explicit flag to win", cfg.CACertFiles)
 	}
 }
+
+func TestMergeRegistryCache(t *testing.T) {
+	distro, version := "kubeadm", ""
+	cfg := Config{}
+	fc := FileConfig{RegistryCache: boolPtr(true)}
+	if err := fc.Merge(&cfg, &distro, &version, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RegistryCache {
+		t.Fatal("registryCache: true in the file did not enable the cache")
+	}
+	cfg = Config{}
+	if err := fc.Merge(&cfg, &distro, &version, func(n string) bool { return n == "registry-cache" }); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RegistryCache {
+		t.Fatal("explicit --registry-cache=false did not override the file")
+	}
+}

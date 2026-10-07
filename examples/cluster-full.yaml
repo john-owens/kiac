@@ -105,6 +105,11 @@ wait: 5m
 # Default: false. Native arm64 images are always faster when available.
 rosetta: false
 
+# Pull docker.io, registry.k8s.io, ghcr.io and quay.io images through the
+# shared zot cache (kiac.registry-cache), started automatically. Cached
+# images survive `kiac delete cluster`. Default: false.
+registryCache: false
+
 # Extra CA certificates (PEM files) every node trusts for image pulls,
 # e.g. a corporate root or TLS-intercepting proxy. Default: none.
 # caCerts:

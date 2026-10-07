@@ -211,6 +211,9 @@ func (c *KrunkitClient) RunDetached(opts RunOpts) (retErr error) {
 	if opts.Entrypoint != "" || len(opts.Args) > 0 || len(opts.Env) > 0 || opts.Kernel != "" || len(opts.Publish) > 0 {
 		return fmt.Errorf("krunkit VM %s must be provisioned after boot; OCI entrypoint, args, env, custom kernels, and --publish are unsupported", opts.Name)
 	}
+	if len(opts.Volumes) > 0 {
+		return fmt.Errorf("krunkit VM %s does not support named volumes", opts.Name)
+	}
 	if opts.Rosetta {
 		return fmt.Errorf("krunkit VM %s cannot use Rosetta; amd64 emulation is only available on apple/container nodes", opts.Name)
 	}

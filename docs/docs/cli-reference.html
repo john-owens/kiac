@@ -89,7 +89,8 @@ kiac create cluster --config cluster.yaml</code></pre>
     <tr><td><code>--mount</code></td><td></td><td>bind a host directory into every node VM; repeat <code>type=bind,source=/host/path,target=/node/path[,readonly]</code>. Explicit CLI mounts replace config-file mounts</td></tr>
     <tr><td><code>-p, --publish</code></td><td></td><td>repeatable <code>[host-ip:]host-port:container-port[/protocol]</code> forwards to the control-plane VM only. Omitted host IP binds all IPv4 interfaces; use <code>127.0.0.1</code> for loopback. Ordinary apple/container clusters only; does not add API-server certificate SANs</td></tr>
     <tr><td><code>--k3s-controlplane-arg</code>, <code>--k3s-worker-arg</code></td><td></td><td>repeatable argv tokens for ordinary K3s control-plane and worker nodes. Use <code>--k3s-controlplane-arg=--tls-san</code> followed by <code>--k3s-controlplane-arg=api.dev.test</code>. KIAC-managed flags are rejected; other conflicting values can still break the cluster. Not supported on kubeadm or GPU clusters</td></tr>
-    <tr><td><code>--ca-cert</code></td><td></td><td>PEM file of extra CA certificates every node trusts for image pulls (corporate root, TLS-intercepting proxy, Nexus/Artifactory); repeatable. kubeadm nodes run <code>update-ca-certificates</code> and restart containerd before <code>kubeadm init</code>; k3s nodes add them to the system bundle before k3s starts. Ordinary apple/container clusters only. The node image itself is pulled by the host <code>container</code> CLI</td></tr>
+    <tr><td><code>--ca-cert</code></td><td></td><td>PEM file of extra CA certificates every node trusts for image pulls (corporate root, TLS-intercepting proxy, Nexus/Artifactory); repeatable. kubeadm nodes run <code>update-ca-certificates</code> and restart containerd before <code>kubeadm init</code>; k3s nodes add them to the system bundle before k3s starts. Ordinary apple/container clusters only. The node image itself is pulled by the host <code>container</code> service, which trusts the macOS System keychain: add the CA there first (<code>sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain corp-root.pem</code>), which corporate-managed Macs usually already do</td></tr>
+    <tr><td><code>--registry-cache</code></td><td><code>false</code></td><td>pull <code>docker.io</code>, <code>registry.k8s.io</code>, <code>ghcr.io</code> and <code>quay.io</code> images through the shared <a href="#cache">registry cache</a>, started automatically, so images survive cluster deletion. <code>--ca-cert</code> also applies to the cache's upstream pulls. Ordinary apple/container clusters only</td></tr>
     <tr><td><code>--rosetta</code></td><td><code>false</code></td><td>enable Rosetta in every node VM (<code>container run --rosetta</code>) so <code>linux/amd64</code> images and binaries run on Apple silicon, including inside pods. Ordinary apple/container clusters only; rejected with <code>--gpu-workers</code>. Requires Rosetta on the host (<code>softwareupdate --install-rosetta</code>)</td></tr>
     <tr><td><code>--cpus</code></td><td><code>4</code></td><td>vCPUs per node VM</td></tr>
     <tr><td><code>--memory</code></td><td><code>2G</code></td><td>memory per worker VM (idle workers use a few hundred MB)</td></tr>
@@ -189,6 +190,20 @@ kiac load image legacy:dev --platform linux/amd64   <span class="c"># amd64 imag
     <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
     <tr><td><code>--name</code></td><td><code>dev</code></td><td>cluster name</td></tr>
     <tr><td><code>--platform</code></td><td>node platform</td><td>image variant to save and import (<code>os/arch[/variant]</code>), e.g. <code>linux/amd64</code> for clusters created with <code>--rosetta</code>. Without it only the node's own arm64 content is imported</td></tr>
+  </table>
+
+  <h2 id="cache">kiac cache</h2>
+  <p>Manage the shared registry pull-through cache: one <a href="https://zotregistry.dev">zot</a> container, <code>kiac.registry-cache</code>, that proxies <code>docker.io</code>, <code>registry.k8s.io</code>, <code>ghcr.io</code> and <code>quay.io</code> for every cluster created with <code>--registry-cache</code>. Cached images live on the named volume <code>kiac.registry-cache</code>, so they survive <code>kiac delete cluster</code>, and a recreated cluster pulls from local disk instead of the internet. Nodes reach the cache by name; <code>kiac cache start</code> and <code>kiac resume cluster</code> re-point that name if the cache restarts on a new address. If the cache is unreachable, containerd falls back to the upstream registry. The cache is a local development convenience, not a trust boundary: it listens without authentication on the VM network shared by every cluster, so anything running there can read from or push to it.</p>
+  <pre><code>kiac create cluster --registry-cache          <span class="c"># starts the cache automatically</span>
+kiac cache status
+kiac cache start --ca-cert corp-root.pem      <span class="c"># trust a corporate CA for upstream pulls</span>
+kiac cache delete                             <span class="c"># keeps cached images</span>
+kiac cache delete --purge                     <span class="c"># also deletes the cached images</span></code></pre>
+  <table>
+    <tr><th>Command</th><th>Flags</th><th>Description</th></tr>
+    <tr><td><code>start</code></td><td><code>--ca-cert</code> (repeatable)</td><td>create or start the cache and re-point running clusters at it. <code>--ca-cert</code> replaces the CAs the cache trusts for upstream pulls; omitted, earlier CAs are kept</td></tr>
+    <tr><td><code>status</code></td><td></td><td>show state and address</td></tr>
+    <tr><td><code>delete</code></td><td><code>--purge</code></td><td>remove the cache container; <code>--purge</code> also deletes the image volume</td></tr>
   </table>
 
   <h2 id="doctor">kiac doctor</h2>

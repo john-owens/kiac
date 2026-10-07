@@ -134,6 +134,8 @@ type Config struct {
 	Rosetta             bool     // run linux/amd64 binaries in node VMs via Rosetta; apple/container only
 	CACertFiles         []string // --ca-cert PEM paths, resolved into CACerts before Create
 	CACerts             []string // extra trusted CA certificates (one PEM block each) for node image pulls
+	RegistryCache       bool     // pull docker.io/registry.k8s.io/ghcr.io/quay.io through the shared zot cache
+	RegistryCacheIP     string   // resolved cache address, set by Create when RegistryCache is on
 	WaitTimeout         time.Duration
 }
 
@@ -252,6 +254,10 @@ func (m *Manager) Create(cfg Config) error {
 		return err
 	}
 
+	if err := m.startRegistryCacheFor(&cfg); err != nil {
+		return err
+	}
+
 	nodes := []string{cp}
 	for i := 1; i <= cfg.Workers; i++ {
 		nodes = append(nodes, worker(cfg.Name, i))
@@ -276,8 +282,8 @@ func (m *Manager) Create(cfg Config) error {
 			if err := m.rt.WaitReady(n, cfg.WaitTimeout); err != nil {
 				return err
 			}
-			if len(cfg.CACerts) > 0 {
-				if err := m.installKubeadmExtraCA(n, cfg.CACerts, cfg.WaitTimeout); err != nil {
+			if len(cfg.CACerts) > 0 || cfg.RegistryCacheIP != "" {
+				if err := m.configureKubeadmContainerd(n, cfg.CACerts, cfg.RegistryCacheIP, cfg.WaitTimeout); err != nil {
 					return err
 				}
 			}
