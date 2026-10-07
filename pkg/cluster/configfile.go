@@ -36,6 +36,7 @@ type FileConfig struct {
 	Memory              string         `yaml:"memory"`
 	CPMemory            string         `yaml:"cpMemory"`
 	Wait                string         `yaml:"wait"`
+	Rosetta             *bool          `yaml:"rosetta"`
 	Addons              FileAddons     `yaml:"addons"`
 }
 
@@ -156,6 +157,9 @@ func (fc *FileConfig) Merge(cfg *Config, distro, k8sVersion *string, changed fun
 			return fmt.Errorf("invalid wait %q in config file (must be > 0)", fc.Wait)
 		}
 		cfg.WaitTimeout = d
+	}
+	if fc.Rosetta != nil && !changed("rosetta") {
+		cfg.Rosetta = *fc.Rosetta
 	}
 	if fc.Addons.Metrics != nil && !changed("no-metrics") {
 		cfg.NoMetrics = !*fc.Addons.Metrics

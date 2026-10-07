@@ -8,7 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var loadName string
+var (
+	loadName     string
+	loadPlatform string
+)
 
 var loadCmd = &cobra.Command{
 	Use:   "load",
@@ -24,7 +27,7 @@ pushing to a registry. Build first with: container build -t myapp .`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ui.Banner(Version)
-		if err := cluster.NewManager().LoadImages(loadName, args); err != nil {
+		if err := cluster.NewManager().LoadImages(loadName, args, loadPlatform); err != nil {
 			return err
 		}
 		fmt.Println()
@@ -35,5 +38,6 @@ pushing to a registry. Build first with: container build -t myapp .`,
 
 func init() {
 	loadImageCmd.Flags().StringVar(&loadName, "name", "dev", "cluster name")
+	loadImageCmd.Flags().StringVar(&loadPlatform, "platform", "", "image platform to load (os/arch[/variant]), e.g. linux/amd64 for clusters created with --rosetta; default is the node's own platform")
 	loadCmd.AddCommand(loadImageCmd)
 }

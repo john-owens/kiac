@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,7 @@ type Config struct {
 	NoEdgeProxy         bool
 	Observability       bool
 	Gateway             bool
+	Rosetta             bool // run linux/amd64 binaries in node VMs via Rosetta; apple/container only
 	WaitTimeout         time.Duration
 }
 
@@ -487,6 +489,7 @@ func kubeadmNodeRunOpts(cfg Config, nodeName, memory string, dns []string) runti
 		DNS:     dns,
 		Mounts:  cfg.Mounts,
 		Publish: publishForNode(cfg, nodeName),
+		Rosetta: cfg.Rosetta,
 	}
 }
 
@@ -839,7 +842,17 @@ func (m *Manager) Nodes(name string) ([]runtime.Info, error) {
 
 // LoadImages copies locally-built images into every node's containerd so
 // pods can use them without a registry, mirroring `kind load docker-image`.
-func (m *Manager) LoadImages(name string, images []string) error {
+func (m *Manager) LoadImages(name string, images []string, platform string) error {
+	if platform != "" && !validPlatform.MatchString(platform) {
+		return fmt.Errorf("invalid --platform %q: want os/arch[/variant], e.g. linux/amd64", platform)
+	}
+	importCmd := []string{"ctr", "-n", "k8s.io", "image", "import"}
+	if platform != "" {
+		// Without this ctr keeps only the node's own (arm64) content, so
+		// an amd64 image meant for Rosetta would import incomplete.
+		importCmd = append(importCmd, "--platform", platform)
+	}
+	importCmd = append(importCmd, "-")
 	infos, err := m.rt.List(prefix(name))
 	if err != nil {
 		return err
@@ -855,7 +868,7 @@ func (m *Manager) LoadImages(name string, images []string) error {
 		tarPath := tar.Name()
 		tar.Close()
 		err = ui.Step(fmt.Sprintf("Loading %s into %d node(s)", img, len(infos)), func() error {
-			if err := m.rt.ImageSave(img, tarPath); err != nil {
+			if err := m.rt.ImageSave(img, tarPath, platform); err != nil {
 				return err
 			}
 			for _, node := range infos {
@@ -863,7 +876,7 @@ func (m *Manager) LoadImages(name string, images []string) error {
 				if err != nil {
 					return err
 				}
-				err = m.rt.ExecStdin(node.Name, f, "ctr", "-n", "k8s.io", "image", "import", "-")
+				err = m.rt.ExecStdin(node.Name, f, importCmd...)
 				f.Close()
 				if err != nil {
 					return err
@@ -878,6 +891,10 @@ func (m *Manager) LoadImages(name string, images []string) error {
 	}
 	return nil
 }
+
+// validPlatform matches an OCI platform string (os/arch[/variant]). It
+// keeps a stray flag or space from reaching the save and import argv.
+var validPlatform = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?$`)
 
 // inParallel runs fn(0..n-1) concurrently and waits for every call to
 // finish: execs into node VMs cannot be cancelled mid-flight, so no

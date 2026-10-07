@@ -160,6 +160,7 @@ type RunOpts struct {
 	DNS        []string // nameserver IPs (--dns); empty keeps the runtime default resolv.conf
 	Mounts     []Mount  // host directory bind mounts (--mount)
 	Publish    []string // host-to-container forwards (--publish), e.g. 127.0.0.1:8080:80
+	Rosetta    bool     // expose Rosetta (--rosetta) so linux/amd64 binaries run in the VM
 }
 
 // RunDetached boots a node VM. The kindest/node entrypoint brings up
@@ -167,6 +168,12 @@ type RunOpts struct {
 // set (container CLI 1.0 tightened the default and the entrypoint needs
 // CAP_SYS_ADMIN); the VM boundary is the isolation, not capabilities.
 func (c *Client) RunDetached(o RunOpts) error {
+	// Fail before building anything else: a CLI without --rosetta would
+	// reject the whole run, and silently dropping the flag would leave
+	// amd64 workloads failing later with "exec format error".
+	if o.Rosetta && !c.supportsRosetta() {
+		return fmt.Errorf("--rosetta requested but this apple/container CLI does not support --rosetta; upgrade apple/container")
+	}
 	args := []string{"run", "-d", "--name", o.Name}
 	if c.supportsCapAdd() {
 		args = append(args, "--cap-add", "ALL")
@@ -203,6 +210,12 @@ func (c *Client) RunDetached(o RunOpts) error {
 	if o.Kernel != "" {
 		args = append(args, "--kernel", o.Kernel)
 	}
+	// Rosetta is shared into the VM over virtiofs and registered with
+	// binfmt_misc using the F (fix-binary) flag, so amd64 binaries run
+	// both in the node itself and in pods nested under its containerd.
+	if o.Rosetta {
+		args = append(args, "--rosetta")
+	}
 	args = append(args, o.Image)
 	args = append(args, o.Args...)
 	_, err := c.run(args...)
@@ -213,6 +226,11 @@ func (c *Client) RunDetached(o RunOpts) error {
 // (added in 1.0.0); 0.x grants a wider default set and lacks the flag.
 func (c *Client) supportsCapAdd() bool {
 	return strings.Contains(c.runHelpOutput(), "--cap-add")
+}
+
+// supportsRosetta probes whether this container CLI knows --rosetta.
+func (c *Client) supportsRosetta() bool {
+	return strings.Contains(c.runHelpOutput(), "--rosetta")
 }
 
 func (c *Client) supportsSecurityPathOverrides() bool {
@@ -564,9 +582,16 @@ func (c *Client) Remove(names ...string) error {
 	return nil
 }
 
-// ImageSave exports a local image to an OCI tarball.
-func (c *Client) ImageSave(image, path string) error {
-	_, err := c.run("image", "save", image, "--output", path)
+// ImageSave exports a local image to an OCI tarball. A non-empty
+// platform (os/arch[/variant]) selects that variant instead of the
+// host's, e.g. linux/amd64 for nodes running with Rosetta.
+func (c *Client) ImageSave(image, path, platform string) error {
+	args := []string{"image", "save"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, image, "--output", path)
+	_, err := c.run(args...)
 	return err
 }
 

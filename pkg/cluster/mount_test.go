@@ -40,3 +40,20 @@ func TestKubeadmNodeRunOptsCarryMounts(t *testing.T) {
 		t.Errorf("memory = control plane %q, worker %q", controlPlane.Memory, worker.Memory)
 	}
 }
+
+func TestNodeRunOptsCarryRosetta(t *testing.T) {
+	for _, rosetta := range []bool{false, true} {
+		cfg := Config{Name: "dev", Image: "example.invalid/node:v1", Rosetta: rosetta}
+		opts := map[string]runtime.RunOpts{
+			"kubeadm control plane": kubeadmNodeRunOpts(cfg, "kiac-dev-control-plane", "4G", nil),
+			"kubeadm worker":        kubeadmNodeRunOpts(cfg, "kiac-dev-worker-1", "2G", nil),
+			"k3s server":            k3sServerRunOpts(cfg, "kiac-dev-control-plane", "token", nil),
+			"k3s agent":             k3sAgentRunOpts(cfg, "kiac-dev-worker-1", nil, nil),
+		}
+		for name, o := range opts {
+			if o.Rosetta != rosetta {
+				t.Errorf("%s Rosetta = %v, want %v", name, o.Rosetta, rosetta)
+			}
+		}
+	}
+}

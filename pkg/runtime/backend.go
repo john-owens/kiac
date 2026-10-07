@@ -37,7 +37,7 @@ type HostRuntime interface {
 	SystemStart(installDefaultKernel bool) error
 	NetworkHasIPv6(network string) (bool, error)
 	ImagePull(image string) error
-	ImageSave(image, path string) error
+	ImageSave(image, path, platform string) error
 }
 
 var _ HostRuntime = (*Client)(nil)

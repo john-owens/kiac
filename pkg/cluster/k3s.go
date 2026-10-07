@@ -216,6 +216,7 @@ func k3sServerRunOpts(cfg Config, nodeName, token string, dns []string) runtime.
 		DNS:        dns,
 		Mounts:     cfg.Mounts,
 		Publish:    publishForNode(cfg, nodeName),
+		Rosetta:    cfg.Rosetta,
 	}
 }
 
@@ -233,6 +234,7 @@ func k3sAgentRunOpts(cfg Config, nodeName string, env []string, dns []string) ru
 		Args:       bootArgs,
 		DNS:        dns,
 		Mounts:     cfg.Mounts,
+		Rosetta:    cfg.Rosetta,
 	}
 }
 

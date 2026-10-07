@@ -244,3 +244,44 @@ func TestCreateClusterCNIPrechecksFailFast(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateClusterRosettaFlagDefaultsOff(t *testing.T) {
+	f := createClusterCmd.Flags().Lookup("rosetta")
+	if f == nil {
+		t.Fatal("create cluster has no --rosetta flag")
+	}
+	if f.DefValue != "false" {
+		t.Fatalf("--rosetta default = %q, want false", f.DefValue)
+	}
+}
+
+func TestCreateClusterRejectsRosettaOnGPU(t *testing.T) {
+	oldCfg, oldDistro := createCfg, createDistro
+	oldConfigFile, oldKernel, oldIPFamily := createConfigFile, createKernel, createIPFamily
+	oldVersion := k8sVersion
+	t.Cleanup(func() {
+		createCfg, createDistro = oldCfg, oldDistro
+		createConfigFile, createKernel, createIPFamily = oldConfigFile, oldKernel, oldIPFamily
+		k8sVersion = oldVersion
+	})
+
+	createCfg = cluster.Config{
+		Name:        "dev",
+		GPUWorkers:  1,
+		GPUImage:    cluster.DefaultGPUImage,
+		GPUDriver:   "device-plugin",
+		GPUDiskSize: "20G",
+		WaitTimeout: 5 * time.Minute,
+		Rosetta:     true,
+	}
+	createDistro = "kubeadm"
+	createConfigFile = ""
+	createKernel = ""
+	createIPFamily = "ipv4"
+	k8sVersion = ""
+
+	err := createClusterCmd.RunE(createClusterCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "--rosetta") {
+		t.Fatalf("RunE error = %v, want --rosetta GPU rejection", err)
+	}
+}

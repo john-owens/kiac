@@ -89,6 +89,7 @@ kiac create cluster --config cluster.yaml</code></pre>
     <tr><td><code>--mount</code></td><td></td><td>bind a host directory into every node VM; repeat <code>type=bind,source=/host/path,target=/node/path[,readonly]</code>. Explicit CLI mounts replace config-file mounts</td></tr>
     <tr><td><code>-p, --publish</code></td><td></td><td>repeatable <code>[host-ip:]host-port:container-port[/protocol]</code> forwards to the control-plane VM only. Omitted host IP binds all IPv4 interfaces; use <code>127.0.0.1</code> for loopback. Ordinary apple/container clusters only; does not add API-server certificate SANs</td></tr>
     <tr><td><code>--k3s-controlplane-arg</code>, <code>--k3s-worker-arg</code></td><td></td><td>repeatable argv tokens for ordinary K3s control-plane and worker nodes. Use <code>--k3s-controlplane-arg=--tls-san</code> followed by <code>--k3s-controlplane-arg=api.dev.test</code>. KIAC-managed flags are rejected; other conflicting values can still break the cluster. Not supported on kubeadm or GPU clusters</td></tr>
+    <tr><td><code>--rosetta</code></td><td><code>false</code></td><td>enable Rosetta in every node VM (<code>container run --rosetta</code>) so <code>linux/amd64</code> images and binaries run on Apple silicon, including inside pods. Ordinary apple/container clusters only; rejected with <code>--gpu-workers</code>. Requires Rosetta on the host (<code>softwareupdate --install-rosetta</code>)</td></tr>
     <tr><td><code>--cpus</code></td><td><code>4</code></td><td>vCPUs per node VM</td></tr>
     <tr><td><code>--memory</code></td><td><code>2G</code></td><td>memory per worker VM (idle workers use a few hundred MB)</td></tr>
     <tr><td><code>--cp-memory</code></td><td><code>4G</code></td><td>memory for the control-plane VM (etcd, apiserver, and on single-node clusters every addon)</td></tr>
@@ -181,10 +182,12 @@ kiac support bundle --name dev --output /tmp/dev-support.tar.gz</code></pre>
   <h2 id="load-image">kiac load image</h2>
   <p>Copy images from the apple/container local image store into the containerd instance of every node VM, so pods can run them without pushing to a registry. Build first with <code>container build -t myapp .</code>, and set <code>imagePullPolicy: IfNotPresent</code> (or <code>Never</code>) in your pod spec.</p>
   <pre><code>kiac load image myapp:dev --name dev
-kiac load image api:dev web:dev --name dev    <span class="c"># several at once</span></code></pre>
+kiac load image api:dev web:dev --name dev    <span class="c"># several at once</span>
+kiac load image legacy:dev --platform linux/amd64   <span class="c"># amd64 image on a --rosetta cluster</span></code></pre>
   <table>
     <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
     <tr><td><code>--name</code></td><td><code>dev</code></td><td>cluster name</td></tr>
+    <tr><td><code>--platform</code></td><td>node platform</td><td>image variant to save and import (<code>os/arch[/variant]</code>), e.g. <code>linux/amd64</code> for clusters created with <code>--rosetta</code>. Without it only the node's own arm64 content is imported</td></tr>
   </table>
 
   <h2 id="doctor">kiac doctor</h2>

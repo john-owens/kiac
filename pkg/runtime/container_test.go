@@ -446,6 +446,56 @@ func TestRunDetachedPassesPublishesBeforeImage(t *testing.T) {
 	}
 }
 
+func TestRunDetachedPassesRosettaWhenRequested(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	client := fakeContainerClient(t, "--cap-add\n--rosetta\n", argsFile)
+
+	err := client.RunDetached(RunOpts{
+		Name:    "kiac-test-control-plane",
+		Image:   "example.invalid/node:v1",
+		Rosetta: true,
+		Args:    []string{"server"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readArgLines(t, argsFile)
+	want := []string{
+		"run", "-d", "--name", "kiac-test-control-plane", "--cap-add", "ALL",
+		"--rosetta",
+		"example.invalid/node:v1", "server",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("run args = %q, want %q", got, want)
+	}
+}
+
+func TestRunDetachedOmitsRosettaByDefault(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	client := fakeContainerClient(t, "--cap-add\n--rosetta\n", argsFile)
+
+	if err := client.RunDetached(RunOpts{Name: "kiac-test", Image: "example.invalid/node:v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readArgs(t, argsFile); slices.Contains(got, "--rosetta") {
+		t.Fatalf("run args = %q, want no --rosetta", got)
+	}
+}
+
+func TestRunDetachedRejectsRosettaOnUnsupportedCLI(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	client := fakeContainerClient(t, "--cap-add\n", argsFile)
+
+	err := client.RunDetached(RunOpts{Name: "kiac-test", Image: "example.invalid/node:v1", Rosetta: true})
+	if err == nil || !strings.Contains(err.Error(), "--rosetta") {
+		t.Fatalf("RunDetached error = %v, want unsupported --rosetta error", err)
+	}
+	if _, statErr := os.Stat(argsFile); !os.IsNotExist(statErr) {
+		t.Fatalf("container run was invoked despite missing --rosetta support")
+	}
+}
+
 func TestSystemStartSelectsKernelInstallMode(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -553,5 +603,24 @@ func TestExecStdinTimeoutDeliversInput(t *testing.T) {
 	data, err := os.ReadFile(got)
 	if err != nil || string(data) != "hello\n" {
 		t.Fatalf("stdin delivered = %q, %v", data, err)
+	}
+}
+
+func TestImageSavePlatform(t *testing.T) {
+	for _, tc := range []struct {
+		platform string
+		want     []string
+	}{
+		{want: []string{"image", "save", "example.invalid/app:v1", "--output", "/tmp/app.tar"}},
+		{platform: "linux/amd64", want: []string{"image", "save", "--platform", "linux/amd64", "example.invalid/app:v1", "--output", "/tmp/app.tar"}},
+	} {
+		argsFile := filepath.Join(t.TempDir(), "args")
+		client := fakeContainerClient(t, "", argsFile)
+		if err := client.ImageSave("example.invalid/app:v1", "/tmp/app.tar", tc.platform); err != nil {
+			t.Fatal(err)
+		}
+		if got := readArgs(t, argsFile); !slices.Equal(got, tc.want) {
+			t.Fatalf("image save args = %q, want %q", got, tc.want)
+		}
 	}
 }

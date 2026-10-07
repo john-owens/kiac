@@ -493,3 +493,15 @@ func TestKrunkitRealLifecycle(t *testing.T) {
 		t.Fatal("deleted real VM remains in backend inventory")
 	}
 }
+
+func TestKrunkitRunDetachedRejectsRosetta(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "fedora.raw")
+	if err := os.WriteFile(base, []byte("disk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &KrunkitClient{RootDir: t.TempDir()}
+	err := c.RunDetached(RunOpts{Name: "kiac-dev-gpu-1", Image: base, Rosetta: true})
+	if err == nil || !strings.Contains(err.Error(), "Rosetta") {
+		t.Fatalf("RunDetached error = %v, want Rosetta rejection", err)
+	}
+}

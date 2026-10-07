@@ -100,6 +100,11 @@ cpMemory: 4G
 # Timeout for nodes to become Ready. Default: 5m.
 wait: 5m
 
+# Enable Rosetta in every node VM so linux/amd64 images and binaries run
+# on Apple silicon (apple/container nodes only; not GPU clusters).
+# Default: false. Native arm64 images are always faster when available.
+rosetta: false
+
 # Addons are positive toggles (true installs). The first three default
 # to true, the last two to false; everything is on here.
 addons:
