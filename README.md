@@ -183,6 +183,18 @@ kiac create cluster --name dev --workers 2 --observability --gateway
 
 One command later you have Grafana at port 3000 on a real LoadBalancer IP (anonymous admin, local-only, two dashboards already provisioned) and a Gateway serving HTTP on port 80, also on a LoadBalancer IP. Point an HTTPRoute at `parentRefs: [{name: kiac, namespace: kiac-gateway}]` and it routes with zero extra setup; see [`examples/gateway-api-lab.md`](examples/gateway-api-lab.md), [`examples/observability-lab.md`](examples/observability-lab.md), and [`examples/httproute.yaml`](examples/httproute.yaml). The same two flags work on kubeadm, k3s, and Cilium clusters.
 
+### Corporate networks, a persistent image cache, and amd64 images
+
+```bash
+# --ca-cert:        trust your corporate CA / TLS-intercepting proxy for image pulls
+# --registry-cache: shared zot cache; pulled images survive kiac delete cluster
+# --rosetta:        linux/amd64 images through Rosetta (opt-in)
+kiac create cluster --name work --workers 2 \
+  --ca-cert ~/corp-root.pem --registry-cache --rosetta
+```
+
+All three are off by default; each also has a config-file key (`caCerts`, `registryCache`, `rosetta`). The [Corporate networks & images guide](https://saiyam1814.github.io/kiac/docs/corporate-and-images.html) covers the macOS keychain step for the node image, `kiac cache` management, and the Rosetta performance trade-offs.
+
 ### Run a real Apple GPU workload (alpha)
 
 ```bash
@@ -289,6 +301,11 @@ kiac gpu values vllm                         # print scheduling values, with com
 kiac gpu compat enable --name gpu-lab --namespace demo # opt-in legacy resource rewrite
 container build -t myapp:dev .               # build with apple/container
 kiac load image myapp:dev --name dev         # push it into every node
+kiac load image legacy:dev --platform linux/amd64  # amd64 build, for --rosetta clusters
+kiac create cluster --ca-cert ~/corp-root.pem       # trust a corporate CA / TLS-intercepting proxy for image pulls
+kiac create cluster --registry-cache         # pull through a shared cache whose images survive cluster deletion
+kiac create cluster --rosetta                # run linux/amd64 images via Rosetta (opt-in; native arm64 is faster)
+kiac cache status                            # shared registry cache: status | start [--ca-cert] | delete [--purge]
 kiac completion zsh                          # bash|zsh|fish|powershell; see kiac completion -h
 kiac delete cluster --name dev
 ```
@@ -319,6 +336,9 @@ Full guides and command reference live on the [docs site](https://saiyam1814.git
 | `-p`, `--publish` | | publish host traffic to the control-plane VM only using `[host-ip:]host-port:container-port[/protocol]`; omitted host IP binds all IPv4 interfaces, so use `127.0.0.1` for loopback only; repeatable; does not add API-server TLS SANs |
 | `--k3s-controlplane-arg` | | extra k3s server argv token; repeatable (`--distro k3s` only). Values are only minimally validated and conflicting flags can break the cluster |
 | `--k3s-worker-arg` | | extra k3s agent argv token; repeatable (`--distro k3s` only). Values are only minimally validated and conflicting flags can break the cluster |
+| `--ca-cert` | | PEM file of extra CA certificates every node trusts for image pulls (corporate root, TLS-intercepting proxy, Nexus/Artifactory); repeatable. The node image itself is pulled by the host `container` service, which trusts the macOS System keychain |
+| `--registry-cache` | `false` | pull docker.io, registry.k8s.io, ghcr.io and quay.io through the shared zot cache `kiac.registry-cache`, started automatically; cached images survive `kiac delete cluster` |
+| `--rosetta` | `false` | start every node VM with Rosetta so `linux/amd64` images and binaries run on Apple silicon; pair with `kiac load image --platform linux/amd64` |
 | `--cpus` | `4` | vCPUs per node VM |
 | `--memory` | `2G` | memory per worker VM (idle workers use a few hundred MB) |
 | `--cp-memory` | `4G` | memory for the control-plane VM (etcd, apiserver, and on single-node clusters every addon) |
