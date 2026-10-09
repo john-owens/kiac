@@ -438,3 +438,15 @@ func TestK3sGPUArtifactsMatchImagePins(t *testing.T) {
 		})
 	}
 }
+
+func TestNodeBootTuningRaisesInotifyLimits(t *testing.T) {
+	for _, want := range []string{"fs.inotify.max_user_instances=1024", "fs.inotify.max_user_watches=524288", "|| true"} {
+		if !strings.Contains(nodeBootTuning, want) {
+			t.Errorf("nodeBootTuning missing %q", want)
+		}
+	}
+	_, args := k3sBoot(Config{Name: "dev"}, nil)
+	if !strings.Contains(strings.Join(args, " "), "fs.inotify.max_user_instances=1024") {
+		t.Error("k3s boot preamble does not raise inotify limits")
+	}
+}

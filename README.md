@@ -89,6 +89,9 @@ Containers are great for packaging software, and kiac depends on them. The point
 - 🚪 **Gateway API built in** — `--gateway` installs the Gateway API CRDs and Traefik with a ready-to-use GatewayClass and Gateway, so an HTTPRoute works out of the box.
 - 💥 **Node chaos you can trust** — `kiac stop node` / `kiac start node` stop and restart a real node VM: NotReady detection, eviction, rescheduling, rejoin.
 - **Diagnostics with an exit code** — `kiac verify cluster` checks the VM, Kubernetes, pod network, DNS, storage, metrics, edge proxy, LoadBalancer, Gateway, observability, and host API paths without changing the cluster. JSON output is stable for automation; `kiac support bundle` writes a bounded, redacted archive for issue reports.
+- 🔐 **Corporate networks** — `--ca-cert corp-root.pem` (repeatable) makes every node trust extra CAs for image pulls: corporate roots, TLS-intercepting proxies, Nexus or Artifactory registries.
+- 📦 **Images that outlive the cluster** — `--registry-cache` pulls docker.io, registry.k8s.io, ghcr.io and quay.io through one shared zot cache whose images survive `kiac delete cluster`, so a recreated cluster pulls from local disk. `kiac cache status|start|delete` manages it.
+- 🧬 **amd64 images via Rosetta (opt-in)** — `--rosetta` starts every node VM with Rosetta so `linux/amd64` binaries run in nodes and pods; `kiac load image --platform linux/amd64` loads amd64 builds. Off by default because native arm64 is always faster.
 - 📄 **Declarative clusters** — `kiac create cluster --config cluster.yaml` describes the whole cluster in one file; explicit flags override it.
 - 🖥️ **A console when you want one** — `kiac ui` opens a local web console: cluster cards, live resource bars, node stop/start buttons, Grafana and Gateway links, a create form, and a per-cluster kubectl Console drawer (loopback-only, no shell). Works on every distro. Same engine as the CLI.
 - 🍎 **Native stack** — one Swift runtime from Apple, one Go binary from us. Coexists with Docker Desktop, kind, and k3d; never touches the Docker socket.
@@ -179,6 +182,18 @@ kiac create cluster --name dev --workers 2 --observability --gateway
 ```
 
 One command later you have Grafana at port 3000 on a real LoadBalancer IP (anonymous admin, local-only, two dashboards already provisioned) and a Gateway serving HTTP on port 80, also on a LoadBalancer IP. Point an HTTPRoute at `parentRefs: [{name: kiac, namespace: kiac-gateway}]` and it routes with zero extra setup; see [`examples/gateway-api-lab.md`](examples/gateway-api-lab.md), [`examples/observability-lab.md`](examples/observability-lab.md), and [`examples/httproute.yaml`](examples/httproute.yaml). The same two flags work on kubeadm, k3s, and Cilium clusters.
+
+### Corporate networks, a persistent image cache, and amd64 images
+
+```bash
+# --ca-cert:        trust your corporate CA / TLS-intercepting proxy for image pulls
+# --registry-cache: shared zot cache; pulled images survive kiac delete cluster
+# --rosetta:        linux/amd64 images through Rosetta (opt-in)
+kiac create cluster --name work --workers 2 \
+  --ca-cert ~/corp-root.pem --registry-cache --rosetta
+```
+
+All three are off by default; each also has a config-file key (`caCerts`, `registryCache`, `rosetta`). The [Corporate networks & images guide](https://saiyam1814.github.io/kiac/docs/corporate-and-images.html) covers the macOS keychain step for the node image, `kiac cache` management, and the Rosetta performance trade-offs.
 
 ### Run a real Apple GPU workload (alpha)
 
@@ -286,6 +301,11 @@ kiac gpu values vllm                         # print scheduling values, with com
 kiac gpu compat enable --name gpu-lab --namespace demo # opt-in legacy resource rewrite
 container build -t myapp:dev .               # build with apple/container
 kiac load image myapp:dev --name dev         # push it into every node
+kiac load image legacy:dev --platform linux/amd64  # amd64 build, for --rosetta clusters
+kiac create cluster --ca-cert ~/corp-root.pem       # trust a corporate CA / TLS-intercepting proxy for image pulls
+kiac create cluster --registry-cache         # pull through a shared cache whose images survive cluster deletion
+kiac create cluster --rosetta                # run linux/amd64 images via Rosetta (opt-in; native arm64 is faster)
+kiac cache status                            # shared registry cache: status | start [--ca-cert] | delete [--purge]
 kiac completion zsh                          # bash|zsh|fish|powershell; see kiac completion -h
 kiac delete cluster --name dev
 ```
@@ -316,6 +336,9 @@ Full guides and command reference live on the [docs site](https://saiyam1814.git
 | `-p`, `--publish` | | publish host traffic to the control-plane VM only using `[host-ip:]host-port:container-port[/protocol]`; omitted host IP binds all IPv4 interfaces, so use `127.0.0.1` for loopback only; repeatable; does not add API-server TLS SANs |
 | `--k3s-controlplane-arg` | | extra k3s server argv token; repeatable (`--distro k3s` only). Values are only minimally validated and conflicting flags can break the cluster |
 | `--k3s-worker-arg` | | extra k3s agent argv token; repeatable (`--distro k3s` only). Values are only minimally validated and conflicting flags can break the cluster |
+| `--ca-cert` | | PEM file of extra CA certificates every node trusts for image pulls (corporate root, TLS-intercepting proxy, Nexus/Artifactory); repeatable. The node image itself is pulled by the host `container` service, which trusts the macOS System keychain |
+| `--registry-cache` | `false` | pull docker.io, registry.k8s.io, ghcr.io and quay.io through the shared zot cache `kiac.registry-cache`, started automatically; cached images survive `kiac delete cluster` |
+| `--rosetta` | `false` | start every node VM with Rosetta so `linux/amd64` images and binaries run on Apple silicon; pair with `kiac load image --platform linux/amd64` |
 | `--cpus` | `4` | vCPUs per node VM |
 | `--memory` | `2G` | memory per worker VM (idle workers use a few hundred MB) |
 | `--cp-memory` | `4G` | memory for the control-plane VM (etcd, apiserver, and on single-node clusters every addon) |

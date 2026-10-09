@@ -26,6 +26,7 @@
   <div class="group"><div class="glabel">Core concepts</div>
     <a href="networking.html">Networking</a>
     <a href="storage-and-metrics.html">Storage &amp; metrics</a>
+    <a href="corporate-and-images.html">Corporate networks &amp; images</a>
     <a href="config-file.html">Config file</a>
     <a href="cli-reference.html">CLI reference</a>
   </div>
@@ -113,6 +114,15 @@ kiac verify cluster --name gpu-lab</code></pre>
   <pre><code>kiac create cluster --dns 1.1.1.1 --dns 8.8.8.8</code></pre>
   <p>Or in a <a href="config-file.html">config file</a>: <code>dns: [1.1.1.1, 8.8.8.8]</code>. Choose resolvers your VPN's tunnel actually reaches — public resolvers are the common case, but a corporate resolver works too if it is reachable from inside the VM.</p>
   <p><code>--dns</code> is creation-time configuration: an existing affected cluster must be deleted and recreated to adopt it.</p>
+
+  <h2 id="x509">Image pulls fail with "x509: certificate signed by unknown authority"</h2>
+  <p>A TLS-intercepting proxy (Zscaler and similar) or a private registry CA (Nexus, Artifactory) is in the path. Recreate the cluster with <code>--ca-cert your-ca.pem</code> (repeatable). If the failure is the node image pull during create, before any VM boots, the host <code>container</code> service needs the CA in the macOS System keychain instead. With <code>--registry-cache</code>, run <code>kiac cache start --ca-cert your-ca.pem</code> so the cache trusts it for upstream pulls. See <a href="corporate-and-images.html#ca">Corporate networks &amp; images</a>.</p>
+
+  <h2 id="exec-format">Pods crash with "exec format error"</h2>
+  <p>The image has only a <code>linux/amd64</code> build and the nodes are arm64. Prefer an arm64 or multi-arch tag; otherwise create the cluster with <code>--rosetta</code> and load the image with <code>kiac load image IMAGE --platform linux/amd64</code>. A registry pull that reports <code>no match for platform in manifest</code> needs the same load path. See <a href="corporate-and-images.html#amd64">amd64 images through Rosetta</a>.</p>
+
+  <h2 id="registry-cache">Registry cache not used, or "registry cache not re-pointed"</h2>
+  <p>Pulls fall back to the upstream registry whenever the cache is stopped or unreachable, so the cluster keeps working. Check <code>kiac cache status</code>, then <code>kiac cache start</code>, which also re-points every running cluster created with <code>--registry-cache</code> at the cache's current address. Clusters created without the flag never use the cache.</p>
 
   <h2 id="pending-ip">LoadBalancer EXTERNAL-IP stays &lt;pending&gt;</h2>
   <ul>

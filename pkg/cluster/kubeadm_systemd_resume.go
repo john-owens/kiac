@@ -47,7 +47,7 @@ func (m *Manager) resumeKubeadmSystemd(name string, infos []runtime.Info, waitTi
 			if err := m.rt.WaitReady(node, waitTimeout); err != nil {
 				return err
 			}
-			if _, err := m.rt.Exec(node, "sh", "-euc", "swapoff -a; "+senderOffloadFix); err != nil {
+			if _, err := m.rt.Exec(node, "sh", "-euc", "swapoff -a; "+nodeBootTuning); err != nil {
 				return err
 			}
 			nodeIP, err := m.rt.IP(node)

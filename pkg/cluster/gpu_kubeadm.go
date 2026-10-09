@@ -347,7 +347,7 @@ EOF
 modprobe overlay
 modprobe br_netfilter
 sysctl --system >/dev/null
-` + senderOffloadFix + `
+` + nodeBootTuning + `
 cat > /etc/systemd/system/kubelet.service <<'EOF'
 [Unit]
 Description=kubelet: The Kubernetes Node Agent

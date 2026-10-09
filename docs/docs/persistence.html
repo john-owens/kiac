@@ -26,6 +26,7 @@
   <div class="group"><div class="glabel">Core concepts</div>
     <a href="networking.html">Networking</a>
     <a href="storage-and-metrics.html">Storage &amp; metrics</a>
+    <a href="corporate-and-images.html">Corporate networks &amp; images</a>
     <a href="config-file.html">Config file</a>
     <a href="cli-reference.html">CLI reference</a>
   </div>
@@ -111,6 +112,7 @@ control-plane IP changed 192.168.64.2 -&gt; 192.168.64.5; healing certs and kube
     <li>All Kubernetes objects (etcd's data directory is on the control-plane VM's persistent disk).</li>
     <li>PVC data: local-path volumes are directories on node disks, which persist.</li>
     <li>Images loaded with <code>kiac load image</code>: they live in each node's containerd store.</li>
+    <li>Pulled images, even across <code>kiac delete cluster</code>, when the cluster uses <code>--registry-cache</code>: they live in the shared cache's volume. See <a href="corporate-and-images.html#cache">the registry cache</a>.</li>
     <li>The kiac-lb systemd unit: it is enabled in the VM, so it comes back with the node.</li>
   </ul>
 

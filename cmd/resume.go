@@ -33,7 +33,16 @@ Safe to re-run.`,
 			return fmt.Errorf("unknown resource %q (supported: cluster)", args[0])
 		}
 		ui.Banner(Version)
-		return cluster.NewManager().Resume(resumeName, resumeWait)
+		m := cluster.NewManager()
+		if err := m.Resume(resumeName, resumeWait); err != nil {
+			return err
+		}
+		// Best effort: the cluster is healthy without the cache, since
+		// containerd falls back to the upstream registry.
+		if err := m.HealRegistryCache(resumeName); err != nil {
+			ui.Warnf("registry cache not re-pointed (pulls fall back to upstream registries): %v", err)
+		}
+		return nil
 	},
 }
 

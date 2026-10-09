@@ -352,7 +352,7 @@ EOF
 modprobe overlay
 modprobe br_netfilter
 sysctl --system >/dev/null
-` + senderOffloadFix + `
+` + nodeBootTuning + `
 ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
 ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
 ln -sf /usr/local/bin/k3s /usr/local/bin/crictl

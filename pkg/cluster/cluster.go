@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,16 @@ const ipv6BootPrep = `KIAC_IF="$(ip -4 route show default 2>/dev/null | awk '{pr
 const senderOffloadFix = `KIAC_IF="$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')"; ` +
 	`[ -n "$KIAC_IF" ] && command -v ethtool >/dev/null 2>&1 && ethtool -K "$KIAC_IF" tso off gso off || true`
 
+// inotifyLimits raises the per-user inotify caps. The stock 128
+// instances is exhausted by a handful of watch-heavy pods (log
+// shippers, Argo CD, dev hot-reload), which then fail with "too many
+// open files". sysctls are runtime state, so this runs on every boot.
+// Best-effort, like senderOffloadFix.
+const inotifyLimits = `sysctl -qw fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true`
+
+// nodeBootTuning is the runtime tuning every node VM gets on each boot.
+const nodeBootTuning = senderOffloadFix + "; " + inotifyLimits
+
 // WantsIPv6 reports whether the family carries IPv6 traffic at all.
 func (f IPFamily) WantsIPv6() bool { return f == DualStack || f == IPv6 }
 
@@ -130,6 +141,11 @@ type Config struct {
 	NoEdgeProxy         bool
 	Observability       bool
 	Gateway             bool
+	Rosetta             bool     // run linux/amd64 binaries in node VMs via Rosetta; apple/container only
+	CACertFiles         []string // --ca-cert PEM paths, resolved into CACerts before Create
+	CACerts             []string // extra trusted CA certificates (one PEM block each) for node image pulls
+	RegistryCache       bool     // pull docker.io/registry.k8s.io/ghcr.io/quay.io through the shared zot cache
+	RegistryCacheIP     string   // resolved cache address, set by Create when RegistryCache is on
 	WaitTimeout         time.Duration
 }
 
@@ -248,6 +264,10 @@ func (m *Manager) Create(cfg Config) error {
 		return err
 	}
 
+	if err := m.startRegistryCacheFor(&cfg); err != nil {
+		return err
+	}
+
 	nodes := []string{cp}
 	for i := 1; i <= cfg.Workers; i++ {
 		nodes = append(nodes, worker(cfg.Name, i))
@@ -272,10 +292,15 @@ func (m *Manager) Create(cfg Config) error {
 			if err := m.rt.WaitReady(n, cfg.WaitTimeout); err != nil {
 				return err
 			}
+			if len(cfg.CACerts) > 0 || cfg.RegistryCacheIP != "" {
+				if err := m.configureKubeadmContainerd(n, cfg.CACerts, cfg.RegistryCacheIP, cfg.WaitTimeout); err != nil {
+					return err
+				}
+			}
 			if _, err := m.rt.Exec(n, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 				return err
 			}
-			if _, err := m.rt.Exec(n, "sh", "-c", senderOffloadFix); err != nil {
+			if _, err := m.rt.Exec(n, "sh", "-c", nodeBootTuning); err != nil {
 				return err
 			}
 			if cfg.family().WantsIPv6() {
@@ -487,6 +512,7 @@ func kubeadmNodeRunOpts(cfg Config, nodeName, memory string, dns []string) runti
 		DNS:     dns,
 		Mounts:  cfg.Mounts,
 		Publish: publishForNode(cfg, nodeName),
+		Rosetta: cfg.Rosetta,
 	}
 }
 
@@ -839,7 +865,17 @@ func (m *Manager) Nodes(name string) ([]runtime.Info, error) {
 
 // LoadImages copies locally-built images into every node's containerd so
 // pods can use them without a registry, mirroring `kind load docker-image`.
-func (m *Manager) LoadImages(name string, images []string) error {
+func (m *Manager) LoadImages(name string, images []string, platform string) error {
+	if platform != "" && !validPlatform.MatchString(platform) {
+		return fmt.Errorf("invalid --platform %q: want os/arch[/variant], e.g. linux/amd64", platform)
+	}
+	importCmd := []string{"ctr", "-n", "k8s.io", "image", "import"}
+	if platform != "" {
+		// Without this ctr keeps only the node's own (arm64) content, so
+		// an amd64 image meant for Rosetta would import incomplete.
+		importCmd = append(importCmd, "--platform", platform)
+	}
+	importCmd = append(importCmd, "-")
 	infos, err := m.rt.List(prefix(name))
 	if err != nil {
 		return err
@@ -855,21 +891,19 @@ func (m *Manager) LoadImages(name string, images []string) error {
 		tarPath := tar.Name()
 		tar.Close()
 		err = ui.Step(fmt.Sprintf("Loading %s into %d node(s)", img, len(infos)), func() error {
-			if err := m.rt.ImageSave(img, tarPath); err != nil {
+			if err := m.rt.ImageSave(img, tarPath, platform); err != nil {
 				return err
 			}
-			for _, node := range infos {
+			// Each node reads its own handle on the saved tar, so the
+			// imports run concurrently instead of one node at a time.
+			return inParallel(len(infos), func(i int) error {
 				f, err := os.Open(tarPath)
 				if err != nil {
 					return err
 				}
-				err = m.rt.ExecStdin(node.Name, f, "ctr", "-n", "k8s.io", "image", "import", "-")
-				f.Close()
-				if err != nil {
-					return err
-				}
-			}
-			return nil
+				defer f.Close()
+				return m.rt.ExecStdin(infos[i].Name, f, importCmd...)
+			})
 		})
 		os.Remove(tarPath)
 		if err != nil {
@@ -878,6 +912,10 @@ func (m *Manager) LoadImages(name string, images []string) error {
 	}
 	return nil
 }
+
+// validPlatform matches an OCI platform string (os/arch[/variant]). It
+// keeps a stray flag or space from reaching the save and import argv.
+var validPlatform = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?$`)
 
 // inParallel runs fn(0..n-1) concurrently and waits for every call to
 // finish: execs into node VMs cannot be cancelled mid-flight, so no

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Corporate networks &amp; images · kiac docs</title>
+<meta name="description" content="Corporate CA certificates, a shared registry cache that keeps images across cluster deletes, and amd64 images through Rosetta on kiac.">
+<link rel="icon" type="image/svg+xml" href="../assets/logo-mark.svg">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<input type="checkbox" id="menu">
+<header><div class="hin">
+  <a class="brand" href="../index.html"><img src="../assets/logo-mark.svg" alt="kiac"> kiac</a>
+  <a class="crumb" href="index.html">Docs</a>
+  <span class="spacer"></span>
+  <label for="menu" class="mtoggle">Menu</label>
+  <a class="gh" href="https://github.com/saiyam1814/kiac">GitHub</a>
+</div></header>
+<div class="wrap">
+<aside>
+  <div class="group"><div class="glabel">Start here</div>
+    <a href="index.html">Overview &amp; install</a>
+    <a href="getting-started.html">Getting started</a>
+  </div>
+  <div class="group"><div class="glabel">Core concepts</div>
+    <a href="networking.html">Networking</a>
+    <a href="storage-and-metrics.html">Storage &amp; metrics</a>
+    <a class="on" href="corporate-and-images.html">Corporate networks &amp; images</a>
+    <a href="config-file.html">Config file</a>
+    <a href="cli-reference.html">CLI reference</a>
+  </div>
+  <div class="group"><div class="glabel">Distros &amp; kernels</div>
+    <a href="k3s.html">k3s distro</a>
+    <a href="cilium.html">Cilium &amp; the full kernel</a>
+    <a href="gpu.html">Apple GPU (alpha)</a>
+  </div>
+  <div class="group"><div class="glabel">Built-in addons</div>
+    <a href="observability.html">Observability</a>
+    <a href="gateway-api.html">Gateway API</a>
+  </div>
+  <div class="group"><div class="glabel">Hands-on</div>
+    <a href="labs.html">Integration labs</a>
+    <a href="portainer.html">Portainer on kiac</a>
+    <a href="rancher.html">Rancher on kiac</a>
+  </div>
+  <div class="group"><div class="glabel">Day two</div>
+    <a href="node-chaos.html">Node chaos</a>
+    <a href="persistence.html">Reboots &amp; resume</a>
+    <a href="dashboard.html">Dashboard (kiac ui)</a>
+    <a href="troubleshooting.html">Troubleshooting</a>
+  </div>
+  <div class="group"><div class="glabel">Project</div>
+    <a href="contributing.html">Contributing</a>
+  </div>
+</aside>
+<main>
+  <div class="kicker">Core concepts</div>
+  <h1>Corporate networks &amp; images</h1>
+  <p class="lede">Three opt-in features for real-world networks and image workflows: trust a corporate CA for image pulls, keep pulled images across cluster deletes with a shared registry cache, and run <code>linux/amd64</code> images through Rosetta. All are off by default and work on kubeadm and k3s clusters on the apple/container backend.</p>
+
+  <h2 id="ca">Corporate CAs and TLS-intercepting proxies</h2>
+  <p>Behind Zscaler-style TLS inspection, or when pulling from an internal Nexus or Artifactory with a private CA, node image pulls fail with <code>x509: certificate signed by unknown authority</code>. Give every node your CA:</p>
+  <pre><code>kiac create cluster --ca-cert ~/corp-root.pem
+kiac create cluster --ca-cert ~/corp-root.pem --ca-cert ~/proxy-intercept.pem   <span class="c"># repeatable</span></code></pre>
+  <p>Or in a <a href="config-file.html">config file</a>: <code>caCerts: [/Users/me/corp-root.pem]</code>. Each file may hold several PEM certificates; anything that is not a certificate (a key, a comment) is ignored, and a file with no valid certificate is rejected before any VM boots.</p>
+  <ul>
+    <li><b>kubeadm nodes</b> install the certificates under <code>/usr/local/share/ca-certificates/kiac/</code>, run <code>update-ca-certificates</code>, and restart containerd before <code>kubeadm init</code>, so every Kubernetes image pull already trusts them.</li>
+    <li><b>k3s nodes</b> add them to <code>/etc/ssl/certs/ca-certificates.crt</code> in the boot preamble before k3s starts, rebuilding from a pristine copy on every boot so restarts never duplicate entries.</li>
+  </ul>
+  <div class="note"><b>The node image itself.</b> The first pull, of the <code>kindest/node</code> or <code>rancher/k3s</code> image, is made by the host <code>container</code> service, which trusts the macOS System keychain rather than <code>--ca-cert</code>. Corporate-managed Macs usually already have the CA there; if not: <code>sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/corp-root.pem</code>, then <code>container system stop &amp;&amp; container system start</code>.</div>
+  <p><code>--ca-cert</code> is not yet supported on real GPU (krunkit) clusters. If your network also needs an explicit HTTP proxy rather than transparent interception, that is not configured by kiac yet.</p>
+
+  <h2 id="cache">A registry cache that outlives your clusters</h2>
+  <p>Deleting a cluster deletes its nodes, and with them every image they pulled; the next cluster downloads them all again. <code>--registry-cache</code> routes pulls through one shared <a href="https://zotregistry.dev">zot</a> pull-through cache instead:</p>
+  <pre><code>kiac create cluster --registry-cache --workers 2   <span class="c"># starts the cache on first use</span>
+kiac delete cluster
+kiac create cluster --registry-cache --workers 2   <span class="c"># pulls come from the cache on local disk</span></code></pre>
+  <p>Config file: <code>registryCache: true</code>. The cache proxies <code>docker.io</code>, <code>registry.k8s.io</code>, <code>ghcr.io</code> and <code>quay.io</code>, which covers Kubernetes, the built-in addons, and most workloads; images from other registries are pulled directly, as before.</p>
+  <table>
+    <tr><th>Piece</th><th>Where</th></tr>
+    <tr><td>Cache container</td><td><code>kiac.registry-cache</code>, deliberately outside the <code>kiac-&lt;cluster&gt;-</code> names, so cluster commands never list or delete it</td></tr>
+    <tr><td>Cached images</td><td>named volume <code>kiac.registry-cache</code>; survives deleting clusters and the cache container</td></tr>
+    <tr><td>Config and upstream CAs</td><td><code>~/.kiac/registry-cache/</code></td></tr>
+    <tr><td>Node wiring</td><td>kubeadm: containerd <code>/etc/containerd/certs.d/&lt;registry&gt;/hosts.toml</code>; k3s: <code>/etc/rancher/k3s/registries.yaml</code>; both resolve <code>kiac.registry-cache</code> through <code>/etc/hosts</code></td></tr>
+  </table>
+  <p>Manage it with <a href="cli-reference.html#cache"><code>kiac cache</code></a>:</p>
+  <pre><code>kiac cache status
+kiac cache start                            <span class="c"># start it, re-point running clusters at its address</span>
+kiac cache start --ca-cert ~/corp-root.pem  <span class="c"># trust a corporate CA for upstream pulls (restarts the cache)</span>
+kiac cache delete                           <span class="c"># remove the container, keep the images</span>
+kiac cache delete --purge                   <span class="c"># remove the images too</span></code></pre>
+  <p><b>Resilience.</b> Container addresses change across restarts, so nodes reach the cache by name, and <code>kiac cache start</code>, <code>kiac resume cluster</code> and <code>kiac start node</code> re-point that name. If the cache is stopped or unreachable, containerd and k3s fall back to the upstream registry: the cluster keeps working, just without the cache. <code>--ca-cert</code> given at create also applies to the cache's own upstream pulls.</p>
+  <div class="note"><b>Trust boundary.</b> The cache is a local development convenience. It listens without authentication on the VM network shared by every cluster, so anything running there can read from it or push to it. Images you load with <code>kiac load image</code> go straight into the nodes and are not kept in the cache.</div>
+
+  <h2 id="amd64">amd64 images through Rosetta</h2>
+  <p>Nodes are arm64. An image published only for <code>linux/amd64</code> fails with <code>exec format error</code>. <code>--rosetta</code> starts every node VM with Rosetta registered for x86-64 binaries, inside the node and inside its pods:</p>
+  <pre><code>kiac create cluster --rosetta</code></pre>
+  <p>Config file: <code>rosetta: true</code>. Rosetta must be installed on the Mac (<code>softwareupdate --install-rosetta --agree-to-license</code>); the VM refuses to start otherwise. Not available on real GPU clusters.</p>
+  <p>For amd64 images you build yourself, load the amd64 variant explicitly; without <code>--platform</code> only the node's own arm64 content is imported:</p>
+  <pre><code>container build --platform linux/amd64 -t legacy:dev .
+kiac load image legacy:dev --platform linux/amd64</code></pre>
+  <p><b>Pulling amd64-only images from a registry.</b> containerd in the node pulls the node's own platform, so an image with no arm64 variant can still be refused with <code>no match for platform in manifest</code> even with Rosetta on. Pull or build it on the Mac and use <code>kiac load image --platform linux/amd64</code> instead.</p>
+  <p><b>Performance.</b> Prefer native arm64 or multi-arch images whenever they exist. Rosetta for Linux translates each new process from scratch, since its translation cache is not enabled by Apple's container framework yet, so start-up-heavy amd64 workloads are noticeably slower. Treat Rosetta as a compatibility mode, give amd64-heavy nodes more CPUs (for example <code>--cpus 6</code> or <code>8</code> on an M4 Pro), and expect occasional upstream Rosetta bugs.</p>
+
+  <h2 id="together">All together</h2>
+  <pre><code>kiac create cluster --name work --workers 2 \
+  --ca-cert ~/corp-root.pem --registry-cache --rosetta</code></pre>
+  <p>Or in a config file:</p>
+  <pre><code>name: work
+workers: 2
+caCerts:
+  - /Users/me/corp-root.pem
+registryCache: true
+rosetta: true</code></pre>
+
+  <div class="pn">
+    <a href="storage-and-metrics.html"><span>Previous</span>Storage &amp; metrics</a>
+    <a class="next" href="config-file.html"><span>Next</span>Config file</a>
+  </div>
+</main>
+</div>
+</body>
+</html>

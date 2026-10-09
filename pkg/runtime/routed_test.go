@@ -82,7 +82,7 @@ func (h *routedTestHost) SystemStatus(time.Duration) (string, error) { return "r
 func (h *routedTestHost) SystemStart(bool) error                     { return nil }
 func (h *routedTestHost) NetworkHasIPv6(string) (bool, error)        { return true, nil }
 func (h *routedTestHost) ImagePull(string) error                     { return nil }
-func (h *routedTestHost) ImageSave(string, string) error             { return nil }
+func (h *routedTestHost) ImageSave(string, string, string) error     { return nil }
 
 func TestRoutedRuntimeDispatchesByNodeName(t *testing.T) {
 	primary := &routedTestHost{&routedTestBackend{name: BackendContainer}}

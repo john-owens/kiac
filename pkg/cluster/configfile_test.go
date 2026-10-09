@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -547,5 +548,92 @@ func TestLoadAndMergeExample(t *testing.T) {
 	}
 	if cfg.NoMetrics || cfg.NoStorage || cfg.NoLB || cfg.Observability || cfg.Gateway {
 		t.Errorf("example addons should match defaults, got %+v", cfg)
+	}
+}
+
+func TestMergeRosetta(t *testing.T) {
+	cases := []struct {
+		name string
+		file *bool
+		flag *bool // non-nil means --rosetta was set on the command line
+		want bool
+	}{
+		{name: "off by default", want: false},
+		{name: "file enables", file: boolPtr(true), want: true},
+		{name: "file disables", file: boolPtr(false), want: false},
+		{name: "flag enables without file", flag: boolPtr(true), want: true},
+		{name: "explicit flag false overrides file true", file: boolPtr(true), flag: boolPtr(false), want: false},
+		{name: "explicit flag true overrides file false", file: boolPtr(false), flag: boolPtr(true), want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{}
+			if tc.flag != nil {
+				cfg.Rosetta = *tc.flag
+			}
+			distro, version := "kubeadm", ""
+			fc := FileConfig{Rosetta: tc.file}
+			changed := func(name string) bool { return name == "rosetta" && tc.flag != nil }
+			if err := fc.Merge(&cfg, &distro, &version, changed); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Rosetta != tc.want {
+				t.Fatalf("Rosetta = %v, want %v", cfg.Rosetta, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigFileRosetta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster.yaml")
+	if err := os.WriteFile(path, []byte("rosetta: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fc, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.Rosetta == nil || !*fc.Rosetta {
+		t.Fatalf("Rosetta = %v, want true", fc.Rosetta)
+	}
+}
+
+func TestMergeCACerts(t *testing.T) {
+	distro, version := "kubeadm", ""
+	fc := FileConfig{CACerts: []string{"/etc/corp/root.pem"}}
+
+	cfg := Config{}
+	if err := fc.Merge(&cfg, &distro, &version, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.CACertFiles, []string{"/etc/corp/root.pem"}) {
+		t.Fatalf("CACertFiles = %q, want file value", cfg.CACertFiles)
+	}
+
+	cfg = Config{CACertFiles: []string{"/cli.pem"}}
+	if err := fc.Merge(&cfg, &distro, &version, func(n string) bool { return n == "ca-cert" }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.CACertFiles, []string{"/cli.pem"}) {
+		t.Fatalf("CACertFiles = %q, want explicit flag to win", cfg.CACertFiles)
+	}
+}
+
+func TestMergeRegistryCache(t *testing.T) {
+	distro, version := "kubeadm", ""
+	cfg := Config{}
+	fc := FileConfig{RegistryCache: boolPtr(true)}
+	if err := fc.Merge(&cfg, &distro, &version, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RegistryCache {
+		t.Fatal("registryCache: true in the file did not enable the cache")
+	}
+	cfg = Config{}
+	if err := fc.Merge(&cfg, &distro, &version, func(n string) bool { return n == "registry-cache" }); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RegistryCache {
+		t.Fatal("explicit --registry-cache=false did not override the file")
 	}
 }

@@ -170,6 +170,6 @@ func (r *RoutedRuntime) NetworkHasIPv6(network string) (bool, error) {
 
 func (r *RoutedRuntime) ImagePull(image string) error { return r.Primary.ImagePull(image) }
 
-func (r *RoutedRuntime) ImageSave(image, path string) error {
-	return r.Primary.ImageSave(image, path)
+func (r *RoutedRuntime) ImageSave(image, path, platform string) error {
+	return r.Primary.ImageSave(image, path, platform)
 }

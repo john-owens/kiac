@@ -552,7 +552,7 @@ func (r *resumeEdgeProxyRuntime) Exec(name string, command ...string) (string, e
 	case cmd == "systemctl is-active containerd":
 		return "active", nil
 	case cmd == "sysctl -w net.ipv4.ip_forward=1",
-		cmd == "sh -c "+senderOffloadFix,
+		cmd == "sh -c "+nodeBootTuning,
 		cmd == "sh -c cat /etc/default/kubelet 2>/dev/null || true":
 		return "", nil
 	case cmd == "cat "+adminConf:
