@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/saiyam1814/kiac/pkg/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRegistryCacheNameIsOutsideClusterNamespace(t *testing.T) {
@@ -99,18 +100,32 @@ func TestKubeadmMirrorScript(t *testing.T) {
 }
 
 func TestK3sRegistriesYAML(t *testing.T) {
-	y := k3sRegistriesYAML()
-	for _, want := range []string{
-		"mirrors:",
-		`  "docker.io":`,
-		`      - "http://kiac.registry-cache:5000"`,
-		`      "^(.*)$": "docker.io/$1"`,
-		`  "registry.k8s.io":`,
-		`      "^(.*)$": "registry.k8s.io/$1"`,
-	} {
-		if !strings.Contains(y, want) {
-			t.Errorf("registries.yaml missing %q:\n%s", want, y)
+	var doc struct {
+		Mirrors map[string]struct {
+			Endpoint []string
+			Rewrite  map[string]string
 		}
+	}
+	if err := yaml.Unmarshal([]byte(k3sRegistriesYAML()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"docker.io", "registry.k8s.io", "ghcr.io", "quay.io"} {
+		m := doc.Mirrors[host]
+		if !slices.Equal(m.Endpoint, []string{"http://kiac.registry-cache:5000"}) || m.Rewrite["^(.*)$"] != host+"/$1" {
+			t.Errorf("mirror %s = %+v", host, m)
+		}
+	}
+}
+
+func TestKubeadmMirrorHostsTOMLCA(t *testing.T) {
+	u := registryUpstreams[0]
+	if got := kubeadmMirrorHostsTOML(u, ""); strings.Contains(got, "ca =") {
+		t.Fatalf("cache-only hosts.toml carries a CA:\n%s", got)
+	}
+	got := kubeadmMirrorHostsTOML(u, "/etc/kiac/registry-cas/x.crt")
+	// Top-level keys after the first table would belong to that table.
+	if ca, table := strings.Index(got, "ca = "), strings.Index(got, "[host."); ca < 0 || ca > table {
+		t.Fatalf("scoped CA must be a top-level key before the mirror table:\n%s", got)
 	}
 }
 

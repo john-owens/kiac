@@ -94,13 +94,6 @@ type registryCA struct {
 // The snapshot is reused by all nodes, so files cannot change between uploads.
 func (cfg *Config) PrepareRegistryCAs() error {
 	if len(cfg.RegistryCAs) > 0 {
-		// Both features own the node's registry config (registries.yaml on
-		// K3s, certs.d/<host>/hosts.toml on kubeadm); the cache's boot prep
-		// would silently replace the per-registry trust. Until the two are
-		// merged into one config, refuse the combination.
-		if cfg.RegistryCache {
-			return fmt.Errorf("--registry-ca cannot be combined with --registry-cache yet; use --ca-cert for node-wide trust, and `kiac cache start --ca-cert` for the cache's upstream pulls")
-		}
 		if cfg.Distro == "k3s" {
 			for _, mount := range cfg.Mounts {
 				target := path.Clean(mount.Target)
@@ -239,6 +232,13 @@ func (m *Manager) installRegistryTrust(node, distro string, cfg Config) error {
 		fmt.Fprintf(&script, "install -d -m 0755 /etc/kiac/registry-cas\ninstall -m 0644 \"$tmp/%s\" %s\n", strings.TrimPrefix(ca.path, "/"), shQuote(ca.path))
 		if distro == "k3s" {
 			configs[ca.host] = map[string]any{"tls": map[string]string{"ca_file": ca.path}}
+		} else if u, ok := cachedUpstream(ca.host); ok && cfg.RegistryCacheIP != "" {
+			// --registry-cache already wrote this directory with the cache
+			// mirror. Rewrite it with the mirror first and the upstream,
+			// trusting the scoped CA, as the fallback server.
+			path := "/etc/containerd/certs.d/" + ca.host + "/hosts.toml"
+			files[strings.TrimPrefix(path, "/")] = []byte(kubeadmMirrorHostsTOML(u, ca.path))
+			fmt.Fprintf(&script, "install -d -m 0755 %s\ninstall -m 0644 \"$tmp/%s\" %s\n", shQuote("/etc/containerd/certs.d/"+ca.host), strings.TrimPrefix(path, "/"), shQuote(path))
 		} else {
 			path := "/etc/containerd/certs.d/" + ca.host + "/hosts.toml"
 			if i := strings.LastIndex(ca.host, ":"); i > 0 {
@@ -257,7 +257,13 @@ func (m *Manager) installRegistryTrust(node, distro string, cfg Config) error {
 		}
 	}
 	if distro == "k3s" {
-		files["etc/rancher/k3s/registries.yaml"], _ = yaml.Marshal(map[string]any{"configs": configs})
+		registries := map[string]any{"configs": configs}
+		if cfg.RegistryCacheIP != "" {
+			// The boot preamble leaves registries.yaml to this step when
+			// --registry-ca is set, so the cache mirrors go in here too.
+			registries["mirrors"] = k3sRegistryMirrors()
+		}
+		files["etc/rancher/k3s/registries.yaml"], _ = yaml.Marshal(registries)
 		preconditions.WriteString(k3sRegistryConfigPreconditions)
 		preconditions.WriteString("test ! -e /etc/rancher/k3s/registries.yaml && test ! -L /etc/rancher/k3s/registries.yaml || { echo 'registries.yaml already exists; refusing to overwrite' >&2; exit 1; }\n")
 		script.WriteString("install -d -m 0755 /etc/rancher/k3s\nnew=$(mktemp /etc/rancher/k3s/registries.yaml.kiac.XXXXXX)\ninstall -m 0600 \"$tmp/etc/rancher/k3s/registries.yaml\" \"$new\"\nmv -f \"$new\" /etc/rancher/k3s/registries.yaml\n: > " + registryReadyPath + "\n")

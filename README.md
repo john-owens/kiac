@@ -194,7 +194,7 @@ kiac create cluster --name work --workers 2 \
   --ca-cert ~/corp-root.pem --registry-cache --rosetta
 ```
 
-All three are off by default; each also has a config-file key (`caCerts`, `registryCache`, `rosetta`). The [Corporate networks & images guide](https://saiyam1814.github.io/kiac/docs/corporate-and-images.html) covers the macOS keychain step for the node image, `kiac cache` management, and the Rosetta performance trade-offs. `--ca-cert` trusts a CA for every pull on every node; the per-registry `--registry-ca` cannot yet be combined with `--registry-cache`.
+All three are off by default; each also has a config-file key (`caCerts`, `registryCache`, `rosetta`). The [Corporate networks & images guide](https://saiyam1814.github.io/kiac/docs/corporate-and-images.html) covers the macOS keychain step for the node image, `kiac cache` management, and the Rosetta performance trade-offs. `--ca-cert` trusts a CA for every pull on every node; upstream's per-registry `--registry-ca` combines with `--registry-cache`: a scoped CA for docker.io, registry.k8s.io, ghcr.io or quay.io applies when a node falls back from the cache to that registry directly.
 
 ### Run a real Apple GPU workload (beta)
 

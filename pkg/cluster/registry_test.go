@@ -14,12 +14,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/saiyam1814/kiac/pkg/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 func registryTestCA(t *testing.T, isCA bool, usage ...x509.KeyUsage) []byte {
@@ -624,20 +627,113 @@ func TestRegistryK3sExistingConfigCannotOpenGateOrWriteTrust(t *testing.T) {
 	}
 }
 
-func TestRegistryCARejectsRegistryCache(t *testing.T) {
-	// The registry cache rewrites registries.yaml / certs.d at boot, which
-	// would silently drop the scoped trust, so the pair is refused up front.
-	for _, distro := range []string{"kubeadm", "k3s"} {
-		t.Run(distro, func(t *testing.T) {
-			cfg := Config{
-				Distro:        distro,
-				RegistryCache: true,
-				RegistryCAs:   RegistryCAs{"registry.example.com": "/nonexistent/ca.pem"},
+// registryCacheTestConfig trusts a scoped CA for one registry the cache
+// mirrors (quay.io) and one it does not, with the cache enabled.
+func registryCacheTestConfig(t *testing.T, distro string) Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, registryTestCA(t, true), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Distro:          distro,
+		RegistryCache:   true,
+		RegistryCacheIP: "192.168.64.9",
+		RegistryCAs:     RegistryCAs{"quay.io": path, "registry.example.test:5443": path},
+		WaitTimeout:     time.Second,
+	}
+	if err := cfg.PrepareRegistryCAs(); err != nil {
+		t.Fatalf("--registry-ca with --registry-cache: %v", err)
+	}
+	return cfg
+}
+
+func TestRegistryTrustK3sKeepsCacheMirrors(t *testing.T) {
+	cfg := registryCacheTestConfig(t, "k3s")
+	rt := &registryRuntime{}
+	if err := (&Manager{rt: rt}).installRegistryTrust("control-plane", "k3s", cfg); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Mirrors map[string]struct {
+			Endpoint []string
+			Rewrite  map[string]string
+		}
+		Configs map[string]struct {
+			TLS struct {
+				CAFile string `yaml:"ca_file"`
 			}
-			err := cfg.PrepareRegistryCAs()
-			if err == nil || !strings.Contains(err.Error(), "--registry-cache") {
-				t.Fatalf("PrepareRegistryCAs error = %v, want --registry-cache rejection", err)
-			}
-		})
+		}
+	}
+	if err := yaml.Unmarshal(rt.files["etc/rancher/k3s/registries.yaml"], &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range registryUpstreams {
+		m, ok := doc.Mirrors[u.Host]
+		if !ok || !slices.Equal(m.Endpoint, []string{registryCacheEndpoint}) || m.Rewrite["^(.*)$"] != u.Host+"/$1" {
+			t.Errorf("mirror for %s = %+v, want the registry cache", u.Host, m)
+		}
+	}
+	for _, ca := range cfg.registryCAs {
+		if doc.Configs[ca.host].TLS.CAFile != ca.path {
+			t.Errorf("CA for %s = %q, want %q", ca.host, doc.Configs[ca.host].TLS.CAFile, ca.path)
+		}
+	}
+}
+
+func TestK3sBootLeavesRegistriesYAMLToRegistryTrust(t *testing.T) {
+	cfg := Config{RegistryCacheIP: "192.168.64.9"}
+	if prep := k3sRegistriesPrepFor(cfg); !strings.Contains(prep, "> /etc/rancher/k3s/registries.yaml") {
+		t.Fatalf("cache-only boot must write registries.yaml:\n%s", prep)
+	}
+	cfg.RegistryCAs = RegistryCAs{"quay.io": "/ca.pem"}
+	prep := k3sRegistriesPrepFor(cfg)
+	if strings.Contains(prep, "registries.yaml") {
+		t.Fatalf("boot with --registry-ca would overwrite the trust in registries.yaml:\n%s", prep)
+	}
+	if !strings.Contains(prep, RegistryCacheName) {
+		t.Fatalf("boot with --registry-ca must still point the cache name at its IP:\n%s", prep)
+	}
+	_, args := k3sBoot(cfg, nil)
+	if boot := strings.Join(args, " "); strings.Contains(boot, "> /etc/rancher/k3s/registries.yaml") {
+		t.Fatalf("k3s boot command overwrites registries.yaml:\n%s", boot)
+	}
+}
+
+func TestRegistryTrustKubeadmMergesCachedUpstream(t *testing.T) {
+	cfg := registryCacheTestConfig(t, "kubeadm")
+	rt := &registryRuntime{config: "version = 2\n[plugins.'io.containerd.grpc.v1.cri'.registry]\n config_path = '/etc/containerd/certs.d'\n"}
+	if err := (&Manager{rt: rt}).installRegistryTrust("control-plane", "kubeadm", cfg); err != nil {
+		t.Fatal(err)
+	}
+	var caPath string
+	for _, ca := range cfg.registryCAs {
+		if ca.host == "quay.io" {
+			caPath = ca.path
+		}
+	}
+	var hosts struct {
+		Server string
+		CA     string
+		Host   map[string]struct {
+			Capabilities []string
+			OverridePath bool `toml:"override_path"`
+		}
+	}
+	raw := rt.files["etc/containerd/certs.d/quay.io/hosts.toml"]
+	if err := toml.Unmarshal(raw, &hosts); err != nil {
+		t.Fatalf("quay.io hosts.toml: %v\n%s", err, raw)
+	}
+	mirror, ok := hosts.Host[registryCacheEndpoint+"/v2/quay.io"]
+	if hosts.Server != "https://quay.io" || hosts.CA != caPath || !ok || !mirror.OverridePath {
+		t.Fatalf("quay.io hosts.toml lost the cache mirror or the scoped CA:\n%s", raw)
+	}
+	// The cache owns quay.io's directory, so it is replaced, not refused;
+	// a registry the cache does not mirror keeps the overwrite guard.
+	if p := shQuote("/etc/containerd/certs.d/quay.io"); strings.Contains(rt.script, "test ! -e "+p) {
+		t.Fatalf("quay.io refused because the cache configured it first:\n%s", rt.script)
+	}
+	if p := shQuote("/etc/containerd/certs.d/registry.example.test:5443"); !strings.Contains(rt.script, "test ! -e "+p) {
+		t.Fatalf("uncached registry lost its overwrite guard:\n%s", rt.script)
 	}
 }
