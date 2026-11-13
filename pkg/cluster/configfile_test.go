@@ -637,3 +637,24 @@ func TestMergeRegistryCache(t *testing.T) {
 		t.Fatal("explicit --registry-cache=false did not override the file")
 	}
 }
+
+func TestMergeVirtualization(t *testing.T) {
+	fc := FileConfig{Virtualization: boolPtr(true)}
+	var cfg Config
+	var distro, version string
+	if err := fc.Merge(&cfg, &distro, &version, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Virtualization {
+		t.Fatal("file virtualization: true was not merged")
+	}
+
+	cfg = Config{}
+	changed := func(flag string) bool { return flag == "virtualization" }
+	if err := fc.Merge(&cfg, &distro, &version, changed); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Virtualization {
+		t.Fatal("explicit --virtualization=false was overridden by the file")
+	}
+}

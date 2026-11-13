@@ -22,7 +22,7 @@ distro: kubeadm
 # workers the control plane is untainted and runs your pods. Default: 0.
 workers: 3
 
-# Real Apple GPU workers are alpha and require krunkit plus vmnet-helper.
+# Real Apple GPU workers are beta and require krunkit plus vmnet-helper.
 # Setting gpuWorkers above zero moves every VM in this cluster to krunkit so
 # all nodes share one reliable network; only -gpu-N nodes publish schedulable
 # GPU inventory and Kiac mounts /dev/dri only into allocated GPU pods. See
@@ -82,6 +82,17 @@ ipFamily: ipv4
 # publish:
 #   - 127.0.0.1:8080:80
 #   - '[::1]:8443:443/udp'
+
+# Registry-specific HTTPS CA trust for workload pulls on every node.
+# registryCAs:
+#   "registry.example.com:5443": /Users/me/certs/company-ca.pem
+
+# Expose nested virtualization (apple/container --virtualization) to every
+# node VM, e.g. for KubeVirt or Kata. Needs an M3 or newer Mac on macOS 15+
+# and, on ordinary clusters, --kernel full on the command line: the default
+# apple/container kernel has no KVM, so nodes get no /dev/kvm without it.
+# GPU clusters pass krunkit --nested and need no extra kernel.
+# virtualization: true
 
 # Extra argv entries for k3s only; each list item is one token.
 # These are appended after kiac's defaults for the respective role.

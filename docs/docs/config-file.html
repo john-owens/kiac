@@ -33,7 +33,8 @@
   <div class="group"><div class="glabel">Distros &amp; kernels</div>
     <a href="k3s.html">k3s distro</a>
     <a href="cilium.html">Cilium &amp; the full kernel</a>
-    <a href="gpu.html">Apple GPU (alpha)</a>
+    <a href="gpu.html">Apple GPU (beta)</a>
+    <a href="external-workers.html">External workers (alpha)</a>
   </div>
   <div class="group"><div class="glabel">Built-in addons</div>
     <a href="observability.html">Observability</a>
@@ -67,7 +68,7 @@
 distro: kubeadm      <span class="c"># kubeadm or k3s</span>
 workers: 2           <span class="c"># worker node count; 0 untaints the control plane</span>
 k8sVersion: "1.37"   <span class="c"># default for both distros</span>
-<span class="c"># gpuWorkers: 1                 # alpha: real Apple GPU workers</span>
+<span class="c"># gpuWorkers: 1                 # beta: real Apple GPU workers</span>
 <span class="c"># gpuImage: fedora-44           # verified cloud image alias</span>
 <span class="c"># gpuDiskSize: 20G              # persistent disk per krunkit VM</span>
 <span class="c"># gpuResourceDriver: dra        # device-plugin, or dra on Kubernetes 1.36+</span>
@@ -81,6 +82,7 @@ mounts:
   - source: /Users/me/project
     target: /workspace
     readOnly: true
+<span class="c"># virtualization: true  # nested virtualization in every node VM (M3+; ordinary clusters need --kernel full)</span>
 cpus: "4"            <span class="c"># vCPUs per node VM (quote it: YAML reads bare 4 as a number)</span>
 memory: 4G           <span class="c"># memory per worker VM</span>
 wait: 5m             <span class="c"># timeout for nodes to become Ready</span>
@@ -94,6 +96,17 @@ addons:
   edgeProxy: true        <span class="c"># node-local TCP proxy for large external uploads</span>
   observability: false   <span class="c"># Prometheus + Grafana + node-exporter</span>
   gateway: false         <span class="c"># Gateway API CRDs + Traefik</span></code></pre>
+
+  <h2 id="registry-trust">Private registry CA trust</h2>
+  <p>Configure HTTPS registry trust before creating a kubeadm or K3s cluster, including GPU clusters. Kiac validates and snapshots PEM CA bundles before setup, then installs registry-specific trust on every control-plane and worker node. The guest files survive stop/start and resume; the original Mac files are not needed afterward.</p>
+  <pre><code>kiac create cluster --name private --workers 1 \
+  --registry-ca registry.example.com:5443=/Users/me/certs/company-ca.pem</code></pre>
+  <p>The matching config-file key is a map. File paths are relative to the current working directory unless absolute:</p>
+  <pre><code>registryCAs:
+  "registry.example.com:5443": /Users/me/certs/company-ca.pem</code></pre>
+  <p>This configures workload image pulls inside nodes. It does not configure the Mac's image downloader or registry authentication; use Kubernetes image pull secrets when credentials are required. CA bundles must contain CA certificates only. Trust stays scoped to the specified registry, and TLS certificate verification remains enabled.</p>
+  <p>Kiac refuses conflicting existing registry directories/configuration and custom containerd registry paths, and verifies that containerd activates the configured trust path. With registry trust enabled, K3s arguments that select a different registry file, external runtime/image service, Docker runtime, or config file are rejected. This prevents a successful create from silently ignoring the requested CA.</p>
+  <p>K3s registry trust requires Kiac-managed configuration: existing <code>/etc/rancher/k3s/config.yaml</code> files, <code>config.yaml.d/*.yaml</code> drop-ins, and <code>config-v3.toml.tmpl</code> or <code>config.toml.tmpl</code> templates in <code>/var/lib/rancher/k3s/agent/etc/containerd</code> are rejected before trust is installed. With <code>--registry-ca</code> enabled for K3s, bind mounts at, above, or below either configuration directory and arguments that change <code>--data-dir</code> (<code>-d</code>) or enable <code>--rootless</code> are also rejected; use a separate directory such as <code>/workspace</code> for project mounts.</p>
 
   <h2 id="schema">Schema</h2>
   <table>
@@ -112,6 +125,8 @@ addons:
     <tr><td><code>dns</code></td><td>list of IPs (max 3)</td><td>runtime default</td><td><code>--dns</code></td></tr>
     <tr><td><code>mounts</code></td><td>list of <code>source</code>, <code>target</code>, <code>readOnly</code></td><td>none</td><td><code>--mount</code></td></tr>
     <tr><td><code>publish</code></td><td>list of strings</td><td>none</td><td><code>--publish</code>; ordinary control-plane VM only; use an explicit host IP for loopback binding</td></tr>
+    <tr><td><code>registryCAs</code></td><td>map of registry authority to PEM file</td><td>none</td><td><code>--registry-ca</code>; explicit CLI values replace the entire file map</td></tr>
+    <tr><td><code>virtualization</code></td><td>bool</td><td><code>false</code></td><td><code>--virtualization</code>; GPU clusters use krunkit's <code>--nested</code></td></tr>
     <tr><td><code>k3sControlplaneArgs</code>, <code>k3sWorkerArgs</code></td><td>lists of strings</td><td>none</td><td><code>--k3s-controlplane-arg</code>, <code>--k3s-worker-arg</code>; each item is one argv token; ordinary K3s only</td></tr>
     <tr><td><code>cpus</code></td><td>string</td><td><code>"4"</code></td><td><code>--cpus</code></td></tr>
     <tr><td><code>memory</code></td><td>string</td><td><code>2G</code></td><td><code>--memory</code> (worker VMs)</td></tr>

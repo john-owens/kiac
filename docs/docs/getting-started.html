@@ -33,7 +33,8 @@
   <div class="group"><div class="glabel">Distros &amp; kernels</div>
     <a href="k3s.html">k3s distro</a>
     <a href="cilium.html">Cilium &amp; the full kernel</a>
-    <a href="gpu.html">Apple GPU (alpha)</a>
+    <a href="gpu.html">Apple GPU (beta)</a>
+    <a href="external-workers.html">External workers (alpha)</a>
   </div>
   <div class="group"><div class="glabel">Built-in addons</div>
     <a href="observability.html">Observability</a>
@@ -61,8 +62,8 @@
 
   <h2 id="doctor">1. Check your setup</h2>
   <pre><code>kiac doctor</code></pre>
-  <p>Doctor verifies five things: macOS 26+ (multi-node networking needs it; single-node may still work on older versions), the <code>apple/container</code> CLI at 1.0.0 or newer (1.4.1 recommended; excluding incompatible 1.2.0), the container system service, <code>kubectl</code> on your PATH, and an arm64 CPU.</p>
-  <p>If the container system service is stopped:</p>
+  <p>Doctor verifies five things: macOS 26+ (multi-node networking needs it; single-node may still work on older versions), the <code>apple/container</code> CLI at 1.6.0 or newer (1.6.1 recommended; fixes pinned image digest verification), the container system service, <code>kubectl</code> on your PATH, and an arm64 CPU.</p>
+  <p>After installing a supported CLI, if the container system service is stopped:</p>
   <pre><code>kiac doctor --fix    <span class="c"># runs: container system start</span></code></pre>
 
   <h2 id="create">2. Create a cluster</h2>
@@ -81,12 +82,13 @@ kiac create cluster --k8s-version 1.34       <span class="c"># pick a Kubernetes
 kiac create cluster --distro k3s --workers 1 <span class="c"># k3s nodes, ready in under a minute; see k3s distro</span>
 kiac create cluster --cni cilium --kernel full <span class="c"># Cilium on the full kernel; see the Cilium page</span>
 kiac create cluster --cni flannel --kernel full <span class="c"># upstream Flannel on the full kernel; no host CLI</span>
-kiac create cluster --distro k3s --workers 1 --gpu-workers 1 --gpu-resource-driver dra <span class="c"># real Apple GPU; see the GPU page</span>
+kiac create cluster --distro k3s --workers 1 --gpu-workers 1 --gpu-resource-driver dra --memory 4G <span class="c"># Apple GPU beta; see the GPU page</span>
 kiac create cluster --observability --gateway <span class="c"># everything on; see the addon pages</span>
 kiac create cluster --config cluster.yaml    <span class="c"># declarative; see Config file</span></code></pre>
   <p>A failed create cleans up its half-built node VMs automatically, so your machine never ends up with orphans.</p>
   <div class="note"><b>GPU mode has a separate preflight</b>
-  Install the optional krunkit/Venus dependencies and run <code>kiac gpu doctor</code> before using <code>--gpu-workers</code>. Ordinary clusters keep the faster apple/container path. The <a href="gpu.html">Apple GPU guide</a> explains the topology and the Vulkan-not-CUDA contract.</div>
+  GPU clusters do not require apple/container. Install the optional krunkit/Venus dependencies and run <code>kiac gpu doctor</code> before using <code>--gpu-workers</code>. Ordinary clusters keep the faster apple/container path. The <a href="gpu.html">Apple GPU guide</a> explains the topology and the Vulkan-not-CUDA contract.</div>
+  <p>To add a CPU worker on your Mac to an existing K3s cluster, follow the separate <a href="external-workers.html">external-worker alpha guide</a>. It requires a prepared WireGuard peer and IPv4 Flannel VXLAN routing.</p>
 
   <h2 id="kubeconfig">3. The kubeconfig</h2>
   <p>On create, kiac merges the cluster's credentials into your kubeconfig (<code>~/.kube/config</code>, or <code>$KUBECONFIG</code> when it points at a single file) and switches the current context:</p>

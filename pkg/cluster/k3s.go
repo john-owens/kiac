@@ -136,7 +136,7 @@ func validateK3sArgs(values []string, flag string) error {
 // backend (CONFIG_IP_NF_IPTABLES_LEGACY=y) is fully supported. Both
 // variants ship in the image under /bin/aux.
 func k3sBoot(cfg Config, k3sArgs []string) (entrypoint string, args []string) {
-	cmd := k3sExtraCAPrep + k3sRegistriesPrep + k3sCgroupPrep + nodeBootTuning + "; " +
+	cmd := registryBootGate(cfg) + k3sExtraCAPrep + k3sRegistriesPrep + k3sCgroupPrep + nodeBootTuning + "; " +
 		"for t in iptables iptables-save iptables-restore ip6tables ip6tables-save ip6tables-restore; do ln -sf xtables-legacy-multi /bin/aux/$t; done; " +
 		"if [ -x " + kiacLBScriptPath + " ]; then " +
 		"mkdir -p /var/log /var/run; " +
@@ -205,18 +205,19 @@ func k3sAgentEnv(serverIP, token string) []string {
 func k3sServerRunOpts(cfg Config, nodeName, token string, dns []string) runtime.RunOpts {
 	entry, bootArgs := k3sBoot(cfg, k3sServerArgs(cfg, nodeName))
 	return runtime.RunOpts{
-		Name:       nodeName,
-		Image:      cfg.Image,
-		CPUs:       cfg.CPUs,
-		Memory:     cfg.CPMemory,
-		Env:        append(append([]string{"K3S_TOKEN=" + token}, k3sExtraCAEnvFor(cfg)...), k3sRegistriesEnvFor(cfg)...),
-		Entrypoint: entry,
-		Kernel:     cfg.Kernel,
-		Args:       bootArgs,
-		DNS:        dns,
-		Mounts:     cfg.Mounts,
-		Publish:    publishForNode(cfg, nodeName),
-		Rosetta:    cfg.Rosetta,
+		Name:           nodeName,
+		Image:          cfg.Image,
+		CPUs:           cfg.CPUs,
+		Memory:         cfg.CPMemory,
+		Env:            append(append([]string{"K3S_TOKEN=" + token}, k3sExtraCAEnvFor(cfg)...), k3sRegistriesEnvFor(cfg)...),
+		Entrypoint:     entry,
+		Kernel:         cfg.Kernel,
+		Args:           bootArgs,
+		DNS:            dns,
+		Mounts:         cfg.Mounts,
+		Publish:        publishForNode(cfg, nodeName),
+		Rosetta:        cfg.Rosetta,
+		Virtualization: cfg.Virtualization,
 	}
 }
 
@@ -224,17 +225,18 @@ func k3sServerRunOpts(cfg Config, nodeName, token string, dns []string) runtime.
 func k3sAgentRunOpts(cfg Config, nodeName string, env []string, dns []string) runtime.RunOpts {
 	entry, bootArgs := k3sBoot(cfg, k3sAgentArgs(cfg, nodeName))
 	return runtime.RunOpts{
-		Name:       nodeName,
-		Image:      cfg.Image,
-		CPUs:       cfg.CPUs,
-		Memory:     cfg.Memory,
-		Env:        append(append(append([]string(nil), env...), k3sExtraCAEnvFor(cfg)...), k3sRegistriesEnvFor(cfg)...),
-		Entrypoint: entry,
-		Kernel:     cfg.Kernel,
-		Args:       bootArgs,
-		DNS:        dns,
-		Mounts:     cfg.Mounts,
-		Rosetta:    cfg.Rosetta,
+		Name:           nodeName,
+		Image:          cfg.Image,
+		CPUs:           cfg.CPUs,
+		Memory:         cfg.Memory,
+		Env:            append(append(append([]string(nil), env...), k3sExtraCAEnvFor(cfg)...), k3sRegistriesEnvFor(cfg)...),
+		Entrypoint:     entry,
+		Kernel:         cfg.Kernel,
+		Args:           bootArgs,
+		DNS:            dns,
+		Mounts:         cfg.Mounts,
+		Rosetta:        cfg.Rosetta,
+		Virtualization: cfg.Virtualization,
 	}
 }
 
@@ -266,6 +268,10 @@ func k3sToken() (string, error) {
 // a supervised process (single binary, sqlite datastore, no systemd). The
 // kubeadm path's systemd-based readiness and addon installs do not apply here.
 func (m *Manager) CreateK3s(cfg Config) error {
+	cfg.Distro = "k3s"
+	if err := cfg.PrepareRegistryCAs(); err != nil {
+		return err
+	}
 	if cfg.GPUWorkers > 0 {
 		return m.createK3sGPU(cfg)
 	}
@@ -344,6 +350,9 @@ func (m *Manager) CreateK3s(cfg Config) error {
 		if err := m.rt.RunDetached(k3sServerRunOpts(cfg, cp, token, dns)); err != nil {
 			return err
 		}
+		if err := m.installRegistryTrust(cp, "k3s", cfg); err != nil {
+			return err
+		}
 		// WaitReady polls systemd/containerd and cannot work here (k3s
 		// has no systemd); the apiserver answering IS readiness for k3s.
 		return m.waitK3sAPI(cp, cfg.WaitTimeout)
@@ -377,6 +386,9 @@ func (m *Manager) CreateK3s(cfg Config) error {
 				w := worker(cfg.Name, i)
 				workers = append(workers, w)
 				if err := m.rt.RunDetached(k3sAgentRunOpts(cfg, w, env, dns)); err != nil {
+					return err
+				}
+				if err := m.installRegistryTrust(w, "k3s", cfg); err != nil {
 					return err
 				}
 			}

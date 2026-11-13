@@ -15,11 +15,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	utilversion "k8s.io/apimachinery/pkg/util/version"
+)
+
+const (
+	// MinimumNodeRuntimeVersion includes the pinned-digest verification fix.
+	MinimumNodeRuntimeVersion     = "1.6.0"
+	RecommendedNodeRuntimeVersion = "1.6.1"
 )
 
 // Client wraps the apple/container CLI binary.
 type Client struct {
 	Bin string
+	// Optional host capability probe; nil queries the native platform API.
+	NestedVirtualizationSupported func() (bool, error)
 
 	runHelpOnce sync.Once
 	runHelp     string
@@ -101,7 +111,7 @@ func (c *Client) Version() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	m := regexp.MustCompile(`(\d+\.\d+\.\d+)`).FindStringSubmatch(out)
+	m := regexp.MustCompile(`(?:^|\s)v?(\d+\.\d+\.\d+[^\s()]*)`).FindStringSubmatch(out)
 	if m == nil {
 		return strings.TrimSpace(out), nil
 	}
@@ -143,25 +153,26 @@ func (c *Client) SystemStart(installDefaultKernel bool) error {
 
 // RunOpts describes one node VM.
 type RunOpts struct {
-	Backend    string // explicit backend for first creation; empty uses route ownership/default
-	Name       string
-	Image      string // OCI image for container, bootable raw disk for krunkit
-	Distro     string // persisted lifecycle identity (kubeadm or k3s) for non-OCI backends
-	K8sVersion string // persisted Kubernetes version for images that do not encode it
-	GPU        bool   // this node exposes a real GPU device to Kubernetes
-	CPUs       string
-	Memory     string
-	DiskSize   string   // krunkit writable disk size; empty defaults to 20G
-	NetworkID  string   // krunkit nodes with the same ID share one vmnet subnet
-	Env        []string // KEY=VALUE pairs, passed as -e flags
-	Entrypoint string   // overrides the image entrypoint when non-empty
-	Kernel     string   // custom kernel Image path (--kernel), empty = bundled default
-	Args       []string // command arguments appended after the image
-	DNS        []string // nameserver IPs (--dns); empty keeps the runtime default resolv.conf
-	Mounts     []Mount  // host directory bind mounts (--mount)
-	Publish    []string // host-to-container forwards (--publish), e.g. 127.0.0.1:8080:80
-	Rosetta    bool     // expose Rosetta (--rosetta) so linux/amd64 binaries run in the VM
-	Volumes    []string // named volumes (-v name:/path) that outlive the container
+	Backend        string // explicit backend for first creation; empty uses route ownership/default
+	Name           string
+	Image          string // OCI image for container, bootable raw disk for krunkit
+	Distro         string // persisted lifecycle identity (kubeadm or k3s) for non-OCI backends
+	K8sVersion     string // persisted Kubernetes version for images that do not encode it
+	GPU            bool   // this node exposes a real GPU device to Kubernetes
+	CPUs           string
+	Memory         string
+	DiskSize       string   // krunkit writable disk size; empty defaults to 20G
+	NetworkID      string   // krunkit nodes with the same ID share one vmnet subnet
+	Env            []string // KEY=VALUE pairs, passed as -e flags
+	Entrypoint     string   // overrides the image entrypoint when non-empty
+	Kernel         string   // custom kernel Image path (--kernel), empty = bundled default
+	Args           []string // command arguments appended after the image
+	DNS            []string // nameserver IPs (--dns); empty keeps the runtime default resolv.conf
+	Mounts         []Mount  // host directory bind mounts (--mount)
+	Publish        []string // host-to-container forwards (--publish), e.g. 127.0.0.1:8080:80
+	Rosetta        bool     // expose Rosetta (--rosetta) so linux/amd64 binaries run in the VM
+	Volumes        []string // named volumes (-v name:/path) that outlive the container
+	Virtualization bool     // exposes nested virtualization to the node VM
 }
 
 // RunDetached boots a node VM. The kindest/node entrypoint brings up
@@ -176,14 +187,22 @@ func (c *Client) RunDetached(o RunOpts) error {
 		return fmt.Errorf("--rosetta requested but this apple/container CLI does not support --rosetta; upgrade apple/container")
 	}
 	args := []string{"run", "-d", "--name", o.Name}
+	if o.Virtualization {
+		if err := requireNestedVirtualization(c.NestedVirtualizationSupported); err != nil {
+			return err
+		}
+		if !c.supportsVirtualization() {
+			return fmt.Errorf("this apple/container CLI does not support --virtualization; upgrade apple/container")
+		}
+		args = append(args, "--virtualization")
+	}
 	if c.supportsCapAdd() {
 		args = append(args, "--cap-add", "ALL")
 	}
 	// container 1.2.0 began applying the OCI default masked/read-only
 	// paths, which make /proc/sys and other paths required by Kubernetes
 	// node images unusable. Version 1.2.1 added these opt-out flags. Probe
-	// the CLI instead of version-gating so older releases remain usable
-	// and future-compatible implementations get the correct node setup.
+	// the CLI so the node setup follows the runtime's supported options.
 	if c.supportsSecurityPathOverrides() {
 		args = append(args, "--masked-path", "NONE", "--read-only-path", "NONE")
 	}
@@ -240,6 +259,12 @@ func (c *Client) supportsRosetta() bool {
 	return help == "" || strings.Contains(help, "--rosetta")
 }
 
+// supportsVirtualization probes whether this container CLI knows
+// --virtualization (nested virtualization inside the container VM).
+func (c *Client) supportsVirtualization() bool {
+	return strings.Contains(c.runHelpOutput(), "--virtualization")
+}
+
 func (c *Client) supportsSecurityPathOverrides() bool {
 	help := c.runHelpOutput()
 	return strings.Contains(help, "--masked-path") && strings.Contains(help, "--read-only-path")
@@ -255,12 +280,16 @@ func (c *Client) runHelpOutput() string {
 	return c.runHelp
 }
 
-// ValidateNodeRuntimeVersion rejects releases that cannot boot Kubernetes
-// node images and offer no CLI escape hatch. container 1.2.1 introduced
-// --masked-path/--read-only-path, so only 1.2.0 is intrinsically broken.
+// ValidateNodeRuntimeVersion requires the digest-verification fix shipped in
+// container 1.6.0. Older releases can silently pull different image content
+// from a registry despite Kiac's pinned digest (CVE-2026-113957).
 func ValidateNodeRuntimeVersion(version string) error {
-	if strings.TrimPrefix(strings.TrimSpace(version), "v") == "1.2.0" {
-		return fmt.Errorf("apple/container 1.2.0 cannot boot Kubernetes node images because required OCI paths are read-only; upgrade to apple/container 1.2.1 or newer")
+	parsed, err := utilversion.ParseSemantic(strings.TrimSpace(version))
+	if err != nil {
+		return fmt.Errorf("cannot verify apple/container version %q; install apple/container %s or newer (%s recommended) from https://github.com/apple/container/releases", version, MinimumNodeRuntimeVersion, RecommendedNodeRuntimeVersion)
+	}
+	if !parsed.AtLeast(utilversion.MustParseSemantic(MinimumNodeRuntimeVersion)) {
+		return fmt.Errorf("apple/container %s does not reliably verify pinned image digests (CVE-2026-113957); upgrade to apple/container %s or newer (%s recommended) before creating or resuming ordinary clusters: https://github.com/apple/container/releases", version, MinimumNodeRuntimeVersion, RecommendedNodeRuntimeVersion)
 	}
 	return nil
 }

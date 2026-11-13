@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/saiyam1814/kiac/pkg/runtime"
 	"github.com/saiyam1814/kiac/pkg/ui"
 )
@@ -133,6 +134,9 @@ type Config struct {
 	DNS                 []string // node VM nameservers; empty = runtime default resolv.conf (see nodeDNS)
 	Mounts              runtime.Mounts
 	Publish             runtime.Publishes // host port forwards for the control-plane VM (--publish)
+	RegistryCAs         RegistryCAs       // HTTPS registry authority to local PEM CA bundle
+	registryCAs         []registryCA      // validated snapshot shared by all node uploads
+	Virtualization      bool              // expose nested virtualization to every node VM (--virtualization)
 	K3sControlPlaneArgs []string          // extra k3s server argv entries, appended after Kiac defaults
 	K3sWorkerArgs       []string          // extra k3s agent argv entries, appended after Kiac defaults
 	NoMetrics           bool
@@ -209,6 +213,9 @@ func gpuWorker(name string, i int) string { return fmt.Sprintf("%sgpu-%d", prefi
 // Create boots the node VMs and brings up Kubernetes. Progress is
 // reported through ui.Step so the caller stays a thin cobra shim.
 func (m *Manager) Create(cfg Config) error {
+	if err := cfg.PrepareRegistryCAs(); err != nil {
+		return err
+	}
 	if cfg.GPUWorkers > 0 {
 		return m.createKubeadmGPU(cfg)
 	}
@@ -307,9 +314,11 @@ func (m *Manager) Create(cfg Config) error {
 				if _, err := m.rt.Exec(n, "sh", "-c", ipv6BootPrep); err != nil {
 					return err
 				}
-				return m.pinKubeletNodeIP(n, cfg.family())
+				if err := m.pinKubeletNodeIP(n, cfg.family()); err != nil {
+					return err
+				}
 			}
-			return nil
+			return m.installRegistryTrust(n, "kubeadm", cfg)
 		})
 	}); err != nil {
 		m.cleanupOnFailure(cfg.Name)
@@ -504,15 +513,16 @@ func (m *Manager) Create(cfg Config) error {
 
 func kubeadmNodeRunOpts(cfg Config, nodeName, memory string, dns []string) runtime.RunOpts {
 	return runtime.RunOpts{
-		Name:    nodeName,
-		Image:   cfg.Image,
-		CPUs:    cfg.CPUs,
-		Memory:  memory,
-		Kernel:  cfg.Kernel,
-		DNS:     dns,
-		Mounts:  cfg.Mounts,
-		Publish: publishForNode(cfg, nodeName),
-		Rosetta: cfg.Rosetta,
+		Name:           nodeName,
+		Image:          cfg.Image,
+		CPUs:           cfg.CPUs,
+		Memory:         memory,
+		Kernel:         cfg.Kernel,
+		DNS:            dns,
+		Mounts:         cfg.Mounts,
+		Publish:        publishForNode(cfg, nodeName),
+		Rosetta:        cfg.Rosetta,
+		Virtualization: cfg.Virtualization,
 	}
 }
 
@@ -875,7 +885,6 @@ func (m *Manager) LoadImages(name string, images []string, platform string) erro
 		// an amd64 image meant for Rosetta would import incomplete.
 		importCmd = append(importCmd, "--platform", platform)
 	}
-	importCmd = append(importCmd, "-")
 	infos, err := m.rt.List(prefix(name))
 	if err != nil {
 		return err
@@ -884,6 +893,17 @@ func (m *Manager) LoadImages(name string, images []string, platform string) erro
 		return fmt.Errorf("no cluster named %q found", name)
 	}
 	for _, img := range images {
+		// Apple retains short build tags in OCI archive annotations, and ctr
+		// imports those names verbatim. CRI resolves the pod's image using
+		// Docker normalization (e.g. swift-agent -> docker.io/library/swift-agent:latest).
+		ref, err := reference.ParseDockerRef(img)
+		if err != nil {
+			return fmt.Errorf("invalid image reference %q: %w", img, err)
+		}
+		imageName := ref.String()
+		// Each archive contains one requested image. Retaining its index
+		// under the CRI name avoids depending on the exporter's aliases.
+		nodeImport := append(append([]string(nil), importCmd...), "--index-name", imageName, "-")
 		tar, err := os.CreateTemp("", "kiac-image-*.tar")
 		if err != nil {
 			return err
@@ -901,8 +921,26 @@ func (m *Manager) LoadImages(name string, images []string, platform string) erro
 				if err != nil {
 					return err
 				}
-				defer f.Close()
-				return m.rt.ExecStdin(infos[i].Name, f, importCmd...)
+				err = m.rt.ExecStdin(infos[i].Name, f, nodeImport...)
+				f.Close()
+				if err != nil {
+					return fmt.Errorf("importing image %q on node %s: %w", img, infos[i].Name, err)
+				}
+				// ctr registers names synchronously. Check the exact reference
+				// before reporting success; not all node images ship crictl.
+				out, err := m.rt.ExecTimeout(infos[i].Name, 10*time.Second,
+					"ctr", "-n", "k8s.io", "images", "ls", "-q", "name=="+imageName)
+				if err != nil {
+					return fmt.Errorf("verifying image %q on node %s: %w", img, infos[i].Name, err)
+				}
+				// Runtime output combines stdout and stderr, so ctr warnings
+				// may accompany an otherwise successful exact-name lookup.
+				for _, line := range strings.Split(out, "\n") {
+					if strings.TrimSpace(line) == imageName {
+						return nil
+					}
+				}
+				return fmt.Errorf("image %q imported on node %s but expected reference %q is missing from containerd", img, infos[i].Name, imageName)
 			})
 		})
 		os.Remove(tarPath)
