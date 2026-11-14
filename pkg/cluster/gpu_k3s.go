@@ -75,14 +75,26 @@ func normalizeK3sStateVersion(version string) string {
 }
 
 func (m *Manager) createK3sGPU(cfg Config) error {
+	cfg.Distro = "k3s"
+	if err := cfg.PrepareRegistryCAs(); err != nil {
+		return err
+	}
 	started := time.Now()
 	cfg = gpuConfigForDistro(cfg, "k3s")
+	version, err := ResolveGPUVersion(cfg.Distro, cfg.K8sVersion, cfg.GPUDriver)
+	if err != nil {
+		return err
+	}
+	cfg.K8sVersion = version
 	if err := validateGPUClusterConfig(cfg); err != nil {
 		return err
 	}
 	cp := ControlPlane(cfg.Name)
 	nodes, gpuNodes := gpuClusterNodeNames(cfg)
 	if err := validateGPUNodeNames(cfg.Name, nodes); err != nil {
+		return err
+	}
+	if err := m.krunkit.CheckDiskHeadroom(len(nodes)); err != nil {
 		return err
 	}
 	if err := m.ensureGPUClusterAbsent(cfg.Name); err != nil {
@@ -122,6 +134,7 @@ func (m *Manager) createK3sGPU(cfg Config) error {
 				Distro: "k3s", K8sVersion: cfg.K8sVersion, GPU: isGPUNode(node),
 				CPUs: cfg.CPUs, Memory: memory, DiskSize: cfg.GPUDiskSize,
 				NetworkID: cfg.Name, DNS: dns, Mounts: cfg.Mounts,
+				Virtualization: cfg.Virtualization,
 			}); err != nil {
 				return err
 			}
@@ -153,6 +166,13 @@ func (m *Manager) createK3sGPU(cfg Config) error {
 		m.cleanupOnFailure(cfg.Name)
 		return err
 	}
+	if err := ui.Step("Installing registry trust", func() error {
+		return inParallel(len(nodes), func(i int) error { return m.installRegistryTrust(nodes[i], "k3s", cfg) })
+	}); err != nil {
+		m.cleanupOnFailure(cfg.Name)
+		return err
+	}
+
 	if err := ui.Step("Initializing K3s control plane", func() error {
 		if err := m.configureK3sGPUNode(cp, "server", serverIP, serverIP, token, cfg); err != nil {
 			return err

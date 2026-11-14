@@ -5,11 +5,14 @@ import (
 	"time"
 
 	"github.com/saiyam1814/kiac/pkg/cluster"
+	"github.com/saiyam1814/kiac/pkg/runtime"
 	"github.com/saiyam1814/kiac/pkg/ui"
 	"github.com/spf13/cobra"
 )
 
 var createCfg = cluster.Config{}
+
+var checkNestedVirtualization = runtime.CheckNestedVirtualization
 
 var createCmd = &cobra.Command{
 	Use:   "create",
@@ -28,6 +31,7 @@ var createClusterCmd = &cobra.Command{
   kiac create cluster --distro k3s --k3s-controlplane-arg=--tls-san --k3s-controlplane-arg=api.dev.test
   kiac create cluster --rosetta
   kiac create cluster -p 127.0.0.1:8080:80
+  kiac create cluster --virtualization
   kiac create cluster --mount type=bind,source="$PWD",target=/workspace,readonly`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ui.Banner(Version)
@@ -54,6 +58,10 @@ var createClusterCmd = &cobra.Command{
 		}
 		if createCfg.GPUWorkers < 0 {
 			return fmt.Errorf("--gpu-workers must be >= 0")
+		}
+		createCfg.Distro = selectedDistro
+		if err := createCfg.PrepareRegistryCAs(); err != nil {
+			return err
 		}
 		if !createCfg.IPFamily.Valid() {
 			return fmt.Errorf("invalid ip-family %q (supported: ipv4, dual, ipv6)", createCfg.IPFamily)
@@ -89,12 +97,20 @@ var createClusterCmd = &cobra.Command{
 			createKernel = "full"
 			ui.Infof("--ip-family %s needs the full node kernel; using --kernel full", createCfg.IPFamily)
 		}
+		if msg := virtualizationKernelWarning(createCfg, createKernel); msg != "" {
+			ui.Warnf("%s", msg)
+		}
 		// Reject a bad --cni before --kernel full can start a download:
 		// a typo should cost a message, not 37MB. Create re-checks.
 		if selectedDistro == "kubeadm" && createCfg.GPUWorkers == 0 {
 			pre := createCfg
 			pre.Kernel = createKernel
 			if err := cluster.ValidateCNI(pre); err != nil {
+				return err
+			}
+		}
+		if createCfg.Virtualization {
+			if err := checkNestedVirtualization(); err != nil {
 				return err
 			}
 		}
@@ -108,7 +124,6 @@ var createClusterCmd = &cobra.Command{
 		if !cluster.ValidName(createCfg.Name) {
 			return fmt.Errorf("invalid cluster name %q: use lowercase letters, digits, and dashes", createCfg.Name)
 		}
-		createCfg.Distro = selectedDistro
 		switch selectedDistro {
 		case "kubeadm":
 			if len(createCfg.K3sControlPlaneArgs) > 0 || len(createCfg.K3sWorkerArgs) > 0 {
@@ -117,7 +132,13 @@ var createClusterCmd = &cobra.Command{
 			if createCfg.GPUWorkers > 0 && createCfg.Image != "" {
 				return fmt.Errorf("--image is an OCI node image and cannot boot real GPU VMs; use --gpu-image for the Fedora disk")
 			}
-			if createCfg.GPUWorkers > 0 || createCfg.Image == "" {
+			if createCfg.GPUWorkers > 0 {
+				version, err := cluster.ResolveGPUVersion(selectedDistro, selectedK8sVersion, createCfg.GPUDriver)
+				if err != nil {
+					return err
+				}
+				createCfg.K8sVersion = version
+			} else if createCfg.Image == "" {
 				if selectedK8sVersion == "" {
 					selectedK8sVersion = defaultK8sVersion(selectedDistro)
 				}
@@ -126,9 +147,7 @@ var createClusterCmd = &cobra.Command{
 					return err
 				}
 				createCfg.K8sVersion = cluster.K8sVersionFromImage(img)
-				if createCfg.GPUWorkers == 0 {
-					createCfg.Image = img
-				}
+				createCfg.Image = img
 			} else {
 				// --image owns the version contract for ordinary clusters. Do
 				// not record an unrelated default Kubernetes version beside it.
@@ -147,7 +166,13 @@ var createClusterCmd = &cobra.Command{
 			if createCfg.GPUWorkers > 0 && (len(createCfg.K3sControlPlaneArgs) > 0 || len(createCfg.K3sWorkerArgs) > 0) {
 				return fmt.Errorf("custom k3s args are not supported on real GPU clusters yet")
 			}
-			if createCfg.GPUWorkers > 0 || createCfg.Image == "" {
+			if createCfg.GPUWorkers > 0 {
+				version, err := cluster.ResolveGPUVersion(selectedDistro, selectedK8sVersion, createCfg.GPUDriver)
+				if err != nil {
+					return err
+				}
+				createCfg.K8sVersion = version
+			} else if createCfg.Image == "" {
 				if selectedK8sVersion == "" {
 					selectedK8sVersion = defaultK8sVersion(selectedDistro)
 				}
@@ -156,9 +181,7 @@ var createClusterCmd = &cobra.Command{
 					return err
 				}
 				createCfg.K8sVersion = cluster.K8sVersionFromImage(img)
-				if createCfg.GPUWorkers == 0 {
-					createCfg.Image = img
-				}
+				createCfg.Image = img
 			} else {
 				createCfg.K8sVersion = cluster.K8sVersionFromImage(createCfg.Image)
 			}
@@ -167,6 +190,13 @@ var createClusterCmd = &cobra.Command{
 			return fmt.Errorf("unknown --distro %q (supported: kubeadm, k3s)", selectedDistro)
 		}
 	},
+}
+
+func virtualizationKernelWarning(cfg cluster.Config, kernel string) string {
+	if !cfg.Virtualization || cfg.GPUWorkers > 0 || kernel != "" {
+		return ""
+	}
+	return "--virtualization without --kernel full: the default apple/container kernel has no KVM, so nodes will not get /dev/kvm; add --kernel full for nested virtualization"
 }
 
 func defaultK8sVersion(distro string) string {
@@ -189,7 +219,7 @@ func init() {
 	f.StringVar(&createConfigFile, "config", "", "cluster config YAML (see examples/cluster.yaml); flags set explicitly on the command line override file values")
 	f.StringVar(&createCfg.Name, "name", "dev", "cluster name")
 	f.IntVar(&createCfg.Workers, "workers", 0, "number of worker nodes (control plane is untainted when 0)")
-	f.IntVar(&createCfg.GPUWorkers, "gpu-workers", 0, "number of real Apple GPU worker VMs (alpha; moves the whole cluster to the krunkit backend)")
+	f.IntVar(&createCfg.GPUWorkers, "gpu-workers", 0, "number of real Apple GPU worker VMs (beta; moves the whole cluster to the krunkit backend)")
 	f.StringVar(&createCfg.GPUImage, "gpu-image", cluster.DefaultGPUImage, "GPU VM boot disk: fedora-44 (verified download) or a raw ARM64 disk path")
 	f.StringVar(&createCfg.GPUDiskSize, "gpu-disk-size", "20G", "writable disk size for each krunkit-backed node")
 	f.StringVar(&createCfg.GPUDriver, "gpu-resource-driver", "device-plugin", "Kubernetes GPU resource driver: device-plugin or dra")
@@ -204,6 +234,8 @@ func init() {
 	f.StringSliceVar(&createCfg.DNS, "dns", nil, "nameserver IPs for the node VMs, repeatable up to 3 (resolv.conf's own limit); overrides the runtime's default resolv.conf entirely rather than adding to it")
 	f.Var(&createCfg.Mounts, "mount", "bind a host directory into every node VM (type=bind,source=/host/path,target=/node/path[,readonly]); repeatable")
 	f.VarP(&createCfg.Publish, "publish", "p", "publish a host port to the control-plane VM only ([host-ip:]host-port:container-port[/protocol]); omitted host IP binds all IPv4 interfaces; repeatable; does not add API-server TLS SANs")
+	f.Var(&createCfg.RegistryCAs, "registry-ca", "trust a PEM CA bundle for HTTPS image pulls on every node (HOST[:PORT]=PEM_FILE); repeatable")
+	f.BoolVar(&createCfg.Virtualization, "virtualization", false, "expose Apple container nested virtualization to every node VM (needs M3 or newer; ordinary clusters need --kernel full for /dev/kvm; GPU clusters use krunkit --nested)")
 	f.StringArrayVar(&createCfg.K3sControlPlaneArgs, "k3s-controlplane-arg", nil, "extra k3s server argument (k3s distro only); repeatable, minimally validated, and conflicting values can break the cluster")
 	f.StringArrayVar(&createCfg.K3sWorkerArgs, "k3s-worker-arg", nil, "extra k3s agent argument (k3s distro only); repeatable, minimally validated, and conflicting values can break the cluster")
 	f.StringVar(&createCfg.CPUs, "cpus", "4", "vCPUs per node VM")

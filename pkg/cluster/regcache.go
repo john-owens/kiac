@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/saiyam1814/kiac/pkg/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 // The registry cache is one zot pull-through cache shared by every kiac
@@ -264,24 +265,55 @@ func kubeadmMirrorScript(ip string) string {
 		`printf '\n[plugins."io.containerd.grpc.v1.cri".registry]\n  config_path = "/etc/containerd/certs.d"\n' >> "$C"; fi; `)
 	for _, u := range registryUpstreams {
 		d := "/etc/containerd/certs.d/" + u.Host
-		hosts := fmt.Sprintf("server = %q\n\n[host.%q]\n  capabilities = [\"pull\", \"resolve\"]\n  override_path = true\n",
-			u.URL, registryCacheEndpoint+"/v2/"+u.Host)
-		fmt.Fprintf(&b, "mkdir -p %s; printf '%%s' %s > %s/hosts.toml; ", d, shQuote(hosts), d)
+		fmt.Fprintf(&b, "mkdir -p %s; printf '%%s' %s > %s/hosts.toml; ", d, shQuote(kubeadmMirrorHostsTOML(u, "")), d)
 	}
 	b.WriteString(registryCacheHostsScript(ip))
 	return b.String()
 }
 
-// k3sRegistriesYAML is the k3s equivalent: an endpoint per upstream and
-// a rewrite into zot's /<host>/ namespace.
-func k3sRegistriesYAML() string {
+// kubeadmMirrorHostsTOML is the containerd hosts.toml for one cached
+// upstream: the cache first, then the upstream itself as the fallback
+// server. caPath, when set, is a --registry-ca bundle scoped to that
+// upstream; top-level keys apply to the server, and TOML requires them
+// before the first table.
+func kubeadmMirrorHostsTOML(u registryUpstream, caPath string) string {
 	var b strings.Builder
-	b.WriteString("mirrors:\n")
-	for _, u := range registryUpstreams {
-		fmt.Fprintf(&b, "  %q:\n    endpoint:\n      - %q\n    rewrite:\n      \"^(.*)$\": %q\n",
-			u.Host, registryCacheEndpoint, u.Host+"/$1")
+	fmt.Fprintf(&b, "server = %q\n", u.URL)
+	if caPath != "" {
+		fmt.Fprintf(&b, "ca = %q\n", caPath)
 	}
+	fmt.Fprintf(&b, "\n[host.%q]\n  capabilities = [\"pull\", \"resolve\"]\n  override_path = true\n",
+		registryCacheEndpoint+"/v2/"+u.Host)
 	return b.String()
+}
+
+// cachedUpstream reports whether the registry cache mirrors host.
+func cachedUpstream(host string) (registryUpstream, bool) {
+	for _, u := range registryUpstreams {
+		if u.Host == host {
+			return u, true
+		}
+	}
+	return registryUpstream{}, false
+}
+
+// k3sRegistryMirrors is the k3s equivalent: an endpoint per upstream
+// and a rewrite into zot's /<host>/ namespace. It is the mirrors section
+// of registries.yaml, shared with --registry-ca so one file carries both.
+func k3sRegistryMirrors() map[string]any {
+	mirrors := map[string]any{}
+	for _, u := range registryUpstreams {
+		mirrors[u.Host] = map[string]any{
+			"endpoint": []string{registryCacheEndpoint},
+			"rewrite":  map[string]string{"^(.*)$": u.Host + "/$1"},
+		}
+	}
+	return mirrors
+}
+
+func k3sRegistriesYAML() string {
+	raw, _ := yaml.Marshal(map[string]any{"mirrors": k3sRegistryMirrors()})
+	return string(raw)
 }
 
 const k3sRegistryCacheEnv = "KIAC_REGISTRY_CACHE_IP"
@@ -292,7 +324,21 @@ const k3sRegistryCacheEnv = "KIAC_REGISTRY_CACHE_IP"
 // re-point it if the cache has moved since.
 var k3sRegistriesPrep = `if [ -n "$` + k3sRegistryCacheEnv + `" ]; then mkdir -p /etc/rancher/k3s; ` +
 	`printf '%s' ` + shQuote(k3sRegistriesYAML()) + ` > /etc/rancher/k3s/registries.yaml; ` +
-	strings.ReplaceAll(registryCacheHostsScript("__IP__"), "'__IP__ ", `"$`+k3sRegistryCacheEnv+`"' `) + `fi; `
+	k3sCacheHostsPrep + `fi; `
+
+var k3sCacheHostsPrep = strings.ReplaceAll(registryCacheHostsScript("__IP__"), "'__IP__ ", `"$`+k3sRegistryCacheEnv+`"' `)
+
+// k3sRegistriesPrepFor picks the boot-time registry prep. With
+// --registry-ca, installRegistryTrust owns registries.yaml and already
+// wrote the cache mirrors into it before the boot gate opened, so the
+// preamble must only re-point the cache's /etc/hosts entry; rewriting
+// the file here would drop the scoped CA trust.
+func k3sRegistriesPrepFor(cfg Config) string {
+	if len(cfg.RegistryCAs) == 0 {
+		return k3sRegistriesPrep
+	}
+	return `if [ -n "$` + k3sRegistryCacheEnv + `" ]; then ` + k3sCacheHostsPrep + `fi; `
+}
 
 func k3sRegistriesEnvFor(cfg Config) []string {
 	if cfg.RegistryCacheIP == "" {

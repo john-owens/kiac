@@ -65,8 +65,16 @@ func ensureKubeadmGPUArtifacts(version string) (map[string]string, error) {
 }
 
 func (m *Manager) createKubeadmGPU(cfg Config) error {
+	if err := cfg.PrepareRegistryCAs(); err != nil {
+		return err
+	}
 	started := time.Now()
 	cfg = gpuConfigForDistro(cfg, "kubeadm")
+	version, err := ResolveGPUVersion(cfg.Distro, cfg.K8sVersion, cfg.GPUDriver)
+	if err != nil {
+		return err
+	}
+	cfg.K8sVersion = version
 	if err := validateGPUClusterConfig(cfg); err != nil {
 		return err
 	}
@@ -84,6 +92,9 @@ func (m *Manager) createKubeadmGPU(cfg Config) error {
 	cp := ControlPlane(cfg.Name)
 	nodes, gpuNodes := gpuClusterNodeNames(cfg)
 	if err := validateGPUNodeNames(cfg.Name, nodes); err != nil {
+		return err
+	}
+	if err := m.krunkit.CheckDiskHeadroom(len(nodes)); err != nil {
 		return err
 	}
 	if err := m.ensureGPUClusterAbsent(cfg.Name); err != nil {
@@ -122,6 +133,7 @@ func (m *Manager) createKubeadmGPU(cfg Config) error {
 				Distro: "kubeadm", K8sVersion: cfg.K8sVersion, GPU: isGPUNode(node),
 				CPUs: cfg.CPUs, Memory: memory, DiskSize: cfg.GPUDiskSize,
 				NetworkID: cfg.Name, DNS: dns, Mounts: cfg.Mounts,
+				Virtualization: cfg.Virtualization,
 			}); err != nil {
 				return err
 			}
@@ -156,6 +168,13 @@ func (m *Manager) createKubeadmGPU(cfg Config) error {
 		m.cleanupOnFailure(cfg.Name)
 		return fmt.Errorf("kubeadm control-plane address %q is not IPv4", serverIP)
 	}
+	if err := ui.Step("Installing registry trust", func() error {
+		return inParallel(len(nodes), func(i int) error { return m.installRegistryTrust(nodes[i], "kubeadm", cfg) })
+	}); err != nil {
+		m.cleanupOnFailure(cfg.Name)
+		return err
+	}
+
 	if err := ui.Step("Pulling Kubernetes control-plane images", func() error {
 		_, err := m.rt.Exec(cp, "sh", "-euc", `
 for attempt in 1 2 3; do

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -523,13 +524,43 @@ func TestSystemStartSelectsKernelInstallMode(t *testing.T) {
 }
 
 func TestValidateNodeRuntimeVersion(t *testing.T) {
-	for _, version := range []string{"0.8.0", "1.0.0", "1.1.0", "1.2.1", "1.2.2", "2.0.0"} {
+	for _, version := range []string{"1.6.0", "v1.6.0", " 1.6.1 ", "1.6.0+build.1", "1.7.0", "2.0.0"} {
 		if err := ValidateNodeRuntimeVersion(version); err != nil {
 			t.Errorf("ValidateNodeRuntimeVersion(%q): %v", version, err)
 		}
 	}
-	if err := ValidateNodeRuntimeVersion("v1.2.0"); err == nil || !strings.Contains(err.Error(), "1.2.1") {
-		t.Fatalf("ValidateNodeRuntimeVersion(1.2.0) = %v, want upgrade error", err)
+	for _, version := range []string{"0.8.0", "1.0.0", "v1.2.0", "1.2.1", "1.4.1", "1.5.99", "1.6.0-rc.1"} {
+		if err := ValidateNodeRuntimeVersion(version); err == nil || !strings.Contains(err.Error(), "CVE-2026-113957") || !strings.Contains(err.Error(), MinimumNodeRuntimeVersion) {
+			t.Errorf("ValidateNodeRuntimeVersion(%q) = %v, want security upgrade error", version, err)
+		}
+	}
+	for _, version := range []string{"", "unknown", "1.6", "1.6.0-", "01.6.0", "1.6.0.1", "1.6.0 trailing"} {
+		if err := ValidateNodeRuntimeVersion(version); err == nil || !strings.Contains(err.Error(), "cannot verify") {
+			t.Errorf("ValidateNodeRuntimeVersion(%q) = %v, want unknown-version error", version, err)
+		}
+	}
+}
+
+func TestContainerVersionPreservesPrereleaseForSecurityCheck(t *testing.T) {
+	for _, tc := range []struct{ output, want string }{
+		{"container CLI version 1.6.0 (build: abcdef)", "1.6.0"},
+		{"container CLI version v1.6.1", "1.6.1"},
+		{"container CLI version 1.6.0-rc.1 (build: abcdef)", "1.6.0-rc.1"},
+		{"container CLI version 1.6.0+local.1", "1.6.0+local.1"},
+		{"container CLI version 1.6.0-", "1.6.0-"},
+		{"unknown", "unknown"},
+	} {
+		t.Run(tc.output, func(t *testing.T) {
+			bin := filepath.Join(t.TempDir(), "container")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$KIAC_TEST_VERSION_OUTPUT\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("KIAC_TEST_VERSION_OUTPUT", tc.output)
+			got, err := (&Client{Bin: bin}).Version()
+			if err != nil || got != tc.want {
+				t.Fatalf("Version() = %q, %v; want %q", got, err, tc.want)
+			}
+		})
 	}
 }
 
@@ -634,5 +665,72 @@ func TestRunDetachedPassesRosettaWhenHelpProbeFails(t *testing.T) {
 	}
 	if got := readArgs(t, argsFile); !slices.Contains(got, "--rosetta") {
 		t.Fatalf("run args = %q, want --rosetta passed through to the CLI", got)
+	}
+}
+
+func TestRunDetachedPassesVirtualization(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	client := fakeContainerClient(t, "--cap-add\n--virtualization\n", argsFile)
+	client.NestedVirtualizationSupported = func() (bool, error) { return true, nil }
+
+	err := client.RunDetached(RunOpts{
+		Name:           "kiac-test-control-plane",
+		Image:          "example.invalid/node:v1",
+		Virtualization: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readArgLines(t, argsFile)
+	want := []string{
+		"run", "-d", "--name", "kiac-test-control-plane", "--virtualization", "--cap-add", "ALL",
+		"example.invalid/node:v1",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("run args = %q, want %q", got, want)
+	}
+}
+
+func TestRunDetachedRejectsVirtualizationWithoutCLISupport(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	client := fakeContainerClient(t, "--cap-add\n", argsFile)
+	client.NestedVirtualizationSupported = func() (bool, error) { return true, nil }
+
+	err := client.RunDetached(RunOpts{
+		Name:           "kiac-test-control-plane",
+		Image:          "example.invalid/node:v1",
+		Virtualization: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "--virtualization") {
+		t.Fatalf("RunDetached error = %v, want unsupported --virtualization", err)
+	}
+}
+
+func TestRunDetachedRequiresHostVirtualizationSupport(t *testing.T) {
+	for _, probeErr := range []error{nil, errors.New("native capability API failed")} {
+		t.Run(fmt.Sprint(probeErr), func(t *testing.T) {
+			argsFile := filepath.Join(t.TempDir(), "args")
+			client := fakeContainerClient(t, "--virtualization\n", argsFile)
+			client.NestedVirtualizationSupported = func() (bool, error) { return false, probeErr }
+			err := client.RunDetached(RunOpts{Name: "node", Image: "node-image", Virtualization: true})
+			if err == nil || !strings.Contains(err.Error(), "--virtualization") {
+				t.Fatalf("RunDetached error = %v, want host support rejection", err)
+			}
+			if _, err := os.Stat(argsFile); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("container was invoked despite unsupported or unknown host capability: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunDetachedWithoutVirtualizationSkipsHostProbe(t *testing.T) {
+	client := fakeContainerClient(t, "", filepath.Join(t.TempDir(), "args"))
+	client.NestedVirtualizationSupported = func() (bool, error) {
+		t.Fatal("ordinary node must not require nested virtualization")
+		return false, nil
+	}
+	if err := client.RunDetached(RunOpts{Name: "node", Image: "node-image"}); err != nil {
+		t.Fatal(err)
 	}
 }

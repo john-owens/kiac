@@ -33,7 +33,8 @@
   <div class="group"><div class="glabel">Distros &amp; kernels</div>
     <a href="k3s.html">k3s distro</a>
     <a href="cilium.html">Cilium &amp; the full kernel</a>
-    <a href="gpu.html">Apple GPU (alpha)</a>
+    <a href="gpu.html">Apple GPU (beta)</a>
+    <a href="external-workers.html">External workers (alpha)</a>
   </div>
   <div class="group"><div class="glabel">Built-in addons</div>
     <a href="observability.html">Observability</a>
@@ -74,7 +75,7 @@ make test           <span class="c"># go test ./...</span>
 make lint           <span class="c"># go vet ./...</span>
 make ci             <span class="c"># exact formatting, generation, race, vet, and build gate</span>
 ./bin/kiac doctor</code></pre>
-  <p>You need Go, plus the same runtime requirements as any user (Apple silicon, apple/container 1.0+ excluding 1.2.0; 1.4.1 recommended). Unit tests run anywhere; actually creating clusters needs the real runtime.</p>
+  <p>You need Go, plus the same runtime requirements as any user (Apple silicon, apple/container 1.6.0+ for ordinary clusters; 1.6.1 recommended). Unit tests run anywhere; actually creating clusters needs the real runtime.</p>
 
   <h2 id="layout">Project layout</h2>
   <table>

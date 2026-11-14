@@ -30,6 +30,8 @@ type FileConfig struct {
 	DNS                 []string       `yaml:"dns"`
 	Mounts              runtime.Mounts `yaml:"mounts"`
 	Publish             []string       `yaml:"publish"`
+	RegistryCAs         RegistryCAs    `yaml:"registryCAs"`
+	Virtualization      *bool          `yaml:"virtualization"`
 	K3sControlPlaneArgs []string       `yaml:"k3sControlplaneArgs"`
 	K3sWorkerArgs       []string       `yaml:"k3sWorkerArgs"`
 	CPUs                string         `yaml:"cpus"`
@@ -134,6 +136,15 @@ func (fc *FileConfig) Merge(cfg *Config, distro, k8sVersion *string, changed fun
 			}
 		}
 		cfg.Publish = publishes
+	}
+	if fc.RegistryCAs != nil && !changed("registry-ca") {
+		cfg.RegistryCAs = RegistryCAs{}
+		for host, path := range fc.RegistryCAs {
+			cfg.RegistryCAs[host] = path
+		}
+	}
+	if fc.Virtualization != nil && !changed("virtualization") {
+		cfg.Virtualization = *fc.Virtualization
 	}
 	if len(fc.K3sControlPlaneArgs) > 0 && !changed("k3s-controlplane-arg") {
 		cfg.K3sControlPlaneArgs = append([]string(nil), fc.K3sControlPlaneArgs...)
